@@ -191,6 +191,9 @@ struct PyRunArgs {
     #[pyo3(get, set)]
     /// str: commitment type, accepts `kzg`, `ipa`
     pub commitment: PyCommitments,
+    #[pyo3(get, set)]
+    /// Option<usize>: whether to gen explanation, with n samples
+    pub generate_explanation: Option<usize>,
 }
 
 /// default instantiation of PyRunArgs
@@ -221,6 +224,7 @@ impl From<PyRunArgs> for RunArgs {
             rebase_frac_zero_constants: py_run_args.rebase_frac_zero_constants,
             check_mode: py_run_args.check_mode,
             commitment: Some(py_run_args.commitment.into()),
+            generate_explanation: py_run_args.generate_explanation,
         }
     }
 }
@@ -243,6 +247,7 @@ impl Into<PyRunArgs> for RunArgs {
             rebase_frac_zero_constants: self.rebase_frac_zero_constants,
             check_mode: self.check_mode,
             commitment: self.commitment.into(),
+            generate_explanation: self.generate_explanation,
         }
     }
 }

@@ -11,7 +11,7 @@ use crate::circuit::poly::PolyOp;
 use crate::circuit::Op;
 use crate::tensor::{Tensor, TensorError, TensorType};
 use halo2curves::bn256::Fr as Fp;
-use halo2curves::ff::PrimeField;
+use halo2curves::ff::{Field, PrimeField};
 use itertools::Itertools;
 #[cfg(not(target_arch = "wasm32"))]
 use log::{debug, warn};
@@ -69,7 +69,11 @@ pub fn quantize_float(elem: &f64, shift: f64, scale: crate::Scale) -> Result<i64
 /// * `felt` - the field element to dequantize.
 /// * `scale` - `2^scale` used in the fixed point representation.
 /// * `shift` - offset used in the fixed point representation.
-pub fn dequantize(felt: Fp, scale: crate::Scale, shift: f64) -> f64 {
+pub fn dequantize<F: PrimeField + PartialOrd + Field>(
+    felt: F,
+    scale: crate::Scale,
+    shift: f64,
+) -> f64 {
     let int_rep = crate::fieldutils::felt_to_i64(felt);
     let multiplier = scale_to_multiplier(scale);
     int_rep as f64 / multiplier - shift
@@ -1433,6 +1437,16 @@ pub fn quantize_tensor<F: PrimeField + TensorType + PartialOrd>(
 
     value.set_scale(scale);
     value.set_visibility(visibility);
+    Ok(value)
+}
+
+pub fn dequantize_tensor<F: PrimeField + TensorType + PartialOrd>(
+    const_value: Tensor<F>,
+    scale: crate::Scale,
+) -> Result<Tensor<f64>, TensorError> {
+    let mut value: Tensor<f64> =
+        const_value.par_enum_map(|_, x| Ok::<_, TensorError>(dequantize(x, scale, 0.0)))?;
+
     Ok(value)
 }
 

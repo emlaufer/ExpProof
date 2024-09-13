@@ -15,9 +15,9 @@ crate-type = ["cdylib", "rlib"]
 
 
 [dependencies]
-halo2_gadgets = { git = "https://github.com/zkonduit/halo2", branch = "ac/optional-selector-poly" }
-halo2_proofs = { git = "https://github.com/zkonduit/halo2", branch = "ac/optional-selector-poly" }
-halo2curves = { git = "https://github.com/privacy-scaling-explorations/halo2curves", rev = "9fff22c", features = [
+halo2_gadgets = { git = "https://github.com/emlaufer/halo2", branch = "ac/optional-selector-poly" }
+halo2_proofs = { git = "https://github.com/emlaufer/halo2", branch = "ac/optional-selector-poly" }
+halo2curves = { git = "https://github.com/privacy-scaling-explorations/halo2curves", features = [
     "derive_serde",
 ] }
 rand = { version = "0.8", default_features = false }
@@ -32,11 +32,11 @@ serde_json = { version = "1.0.97", default_features = false, features = [
 log = { version = "0.4.17", default_features = false, optional = true }
 thiserror = { version = "1.0.38", default_features = false }
 hex = { version = "0.4.3", default_features = false }
-halo2_wrong_ecc = { git = "https://github.com/zkonduit/halo2wrong", branch = "ac/chunked-mv-lookup", package = "ecc" }
-snark-verifier = { git = "https://github.com/zkonduit/snark-verifier", branch = "ac/chunked-mv-lookup", features = [
+halo2_wrong_ecc = { git = "https://github.com/emlaufer/halo2wrong", branch = "ac/chunked-mv-lookup", package = "ecc" }
+snark-verifier = { git = "https://github.com/emlaufer/snark-verifier", branch = "ac/chunked-mv-lookup", features = [
     "derive_serde",
 ] }
-halo2_solidity_verifier = { git = "https://github.com/alexander-camuto/halo2-solidity-verifier", branch = "main" }
+halo2_solidity_verifier = { git = "https://github.com/emlaufer/halo2-solidity-verifier", branch = "main" }
 maybe-rayon = { version = "0.1.1", default_features = false }
 bincode = { version = "1.3.3", default_features = false }
 unzip-n = "0.1.2"
@@ -45,6 +45,11 @@ portable-atomic = "1.6.0"
 tosubcommand = { git = "https://github.com/zkonduit/enum_to_subcommand", package = "tosubcommand" }
 metal = { git = "https://github.com/gfx-rs/metal-rs", optional = true }
 semver = "1.0.22"
+linfa-elasticnet = "0.7.0"
+linfa = "0.7.0"
+ndarray = "0.15"
+rand_distr = "0.4.3"
+statrs = "0.17.1"
 
 # evm related deps
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
@@ -207,8 +212,8 @@ metal = ["dep:metal", "dep:objc"]
 [patch.'https://github.com/ingonyama-zk/icicle']
 icicle = { git = "https://github.com/ingonyama-zk/icicle?rev=45b00fb", package = "icicle", branch = "fix/vhnat/ezkl-build-fix" }
 
-[patch.'https://github.com/zkonduit/halo2']
-halo2_proofs = { git = "https://github.com/zkonduit/halo2?branch=ac/optional-selector-poly#54f54453cf186aa5d89579c4e7663f9a27cfb89a", package = "halo2_proofs", branch = "ac/optional-selector-poly" }
+#[patch.'https://github.com/zkonduit/halo2']
+#halo2_proofs = { git = "https://github.com/emlaufer/halo2", branch = "ac/optional-selector-poly" }
 
 
 [profile.release]

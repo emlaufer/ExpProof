@@ -303,7 +303,7 @@ impl SupportedOp {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn homogenous_rescale(
+    pub fn homogenous_rescale(
         &self,
         in_scales: Vec<crate::Scale>,
     ) -> Result<Box<dyn Op<Fp>>, GraphError> {

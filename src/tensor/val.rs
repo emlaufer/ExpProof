@@ -973,6 +973,32 @@ impl<F: PrimeField + TensorType + PartialOrd + std::hash::Hash> ValTensor<F> {
             _ => "ValTensor not PrevAssigned".into(),
         }
     }
+
+    pub fn pshow(&self, scale: crate::Scale) -> String {
+        use crate::graph::utilities::dequantize_tensor;
+        let evals = self.get_felt_evals();
+
+        match evals {
+            Ok(evals) => {
+                let r: Tensor<f64> = dequantize_tensor(evals, scale).unwrap();
+                format!("{:?}", r)
+            }
+            Err(e) => "ValTensor not PrevAssigned".into(),
+        }
+    }
+
+    pub fn dequantize(&self, scale: crate::Scale) -> Option<Tensor<f64>> {
+        use crate::graph::utilities::dequantize_tensor;
+        let evals = self.get_felt_evals();
+
+        match evals {
+            Ok(evals) => {
+                let r: Tensor<f64> = dequantize_tensor(evals, scale).unwrap();
+                Some(r)
+            }
+            Err(e) => None,
+        }
+    }
 }
 
 impl<F: PrimeField + TensorType + PartialOrd> ValTensor<F> {

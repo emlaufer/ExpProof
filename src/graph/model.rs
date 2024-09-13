@@ -2,9 +2,14 @@ use super::errors::GraphError;
 use super::extract_const_quantized_values;
 use super::node::*;
 use super::scale_to_multiplier;
+use super::utilities::{dequantize, quantize_float};
 use super::vars::*;
 use super::GraphSettings;
 use crate::circuit::hybrid::HybridOp;
+use crate::circuit::modules::lime::{LimeConfig, LimeInputs, LimeModule};
+use crate::circuit::modules::lime2::Lime2Chip;
+use crate::circuit::modules::GraphModule;
+use crate::circuit::ops::poly::PolyOp;
 use crate::circuit::region::ConstantsMap;
 use crate::circuit::region::RegionCtx;
 use crate::circuit::table::Range;
@@ -132,6 +137,8 @@ pub struct Model {
     pub graph: ParsedNodes,
     /// Defines which inputs to the model are public and private (params, inputs, outputs) using [VarVisibility].
     pub visibility: VarVisibility,
+
+    pub lime_module: Option<LimeModule>,
 }
 
 ///
@@ -474,7 +481,18 @@ impl Model {
 
         let graph = Self::load_onnx_model(reader, run_args, &visibility)?;
 
-        let om = Model { graph, visibility };
+        let lime_module = if let Some(n_samples) = run_args.generate_explanation {
+            let config = <LimeModule as GraphModule<Fp>>::configure(());
+            Some(<LimeModule as GraphModule<Fp>>::new(config))
+        } else {
+            None
+        };
+
+        let om = Model {
+            graph,
+            visibility,
+            lime_module,
+        };
 
         debug!("\n {}", om.table_nodes());
 
@@ -548,7 +566,6 @@ impl Model {
         let res = self.dummy_layout(run_args, &inputs, false, false)?;
 
         // if we're using percentage tolerance, we need to add the necessary range check ops for it.
-
         Ok(GraphSettings {
             run_args: run_args.clone(),
             model_instance_shapes: instance_shapes,
@@ -576,6 +593,7 @@ impl Model {
             ),
             #[cfg(target_arch = "wasm32")]
             timestamp: None,
+            d: self.graph.input_shapes().unwrap()[0][1],
         })
     }
 
@@ -612,6 +630,7 @@ impl Model {
         use tract_onnx::{
             tract_core::internal::IntoArcTensor, tract_hir::internal::GenericFactoid,
         };
+        println!("HI");
 
         let mut model = tract_onnx::onnx().model_for_read(reader)?;
 
@@ -628,8 +647,23 @@ impl Model {
                         Some(x) => x,
                         None => return Err(GraphError::MissingBatchSize),
                     };
+                    let explanation_inferrences = match run_args.generate_explanation {
+                        Some(x) => x,
+                        None => 0,
+                    };
+
+                    if explanation_inferrences != 0 && *batch_size != 1 {
+                        return Err(GraphError::InvalidRunArgs(
+                            "Cannot use explanations with batch_size > 1!".to_owned(),
+                        ));
+                    }
+
+                    // TODO: replace constants
+                    // FIXME(EVAN)
+                    let input_dim = (*batch_size + explanation_inferrences + 10 + 1) as i64;
+
                     fact.shape
-                        .set_dim(i, tract_onnx::prelude::TDim::Val(*batch_size as i64));
+                        .set_dim(i, tract_onnx::prelude::TDim::Val(input_dim));
                 }
             }
 
@@ -642,8 +676,32 @@ impl Model {
 
         let mut symbol_values = SymbolValues::default();
         for (symbol, value) in run_args.variables.iter() {
+            // if symbol is batch size, then include inferrences for
+            // explanations
+            let value = if symbol == "batch_size" {
+                let explanation_inferrences = match run_args.generate_explanation {
+                    Some(x) => x,
+                    None => 0,
+                };
+
+                if explanation_inferrences != 0 && *value != 1 {
+                    return Err(GraphError::InvalidRunArgs(
+                        "Cannot use explanations with batch_size > 1!".to_owned(),
+                    ));
+                }
+
+                // TODO: replace constants
+                // FIXME(EVAN)
+                let input_dim = *value + explanation_inferrences + 10 + 1;
+                input_dim
+            } else {
+                *value
+            };
+
             let symbol = model.symbol_table.sym(symbol);
-            symbol_values = symbol_values.with(&symbol, *value as i64);
+
+            symbol_values = symbol_values.with(&symbol, value as i64);
+
             debug!("set {} to {}", symbol, value);
         }
 
@@ -702,16 +760,83 @@ impl Model {
 
         debug!("\n {}", model);
 
-        let parsed_nodes = ParsedNodes {
+        let mut parsed_nodes = ParsedNodes {
             nodes,
             inputs: model.inputs.iter().map(|o| o.node).collect(),
             outputs: model.outputs.iter().map(|o| (o.node, o.slot)).collect(),
         };
+        println!("got inputs: {:?}", parsed_nodes.inputs);
+
+        let max_node = parsed_nodes
+            .nodes
+            .iter() // get an iterator over the tree
+            .max_by_key(|p| p.0) // check the value of each pair for the max
+            .unwrap(); // unwrap the result
+
+        println!("outputs: {:?}", parsed_nodes.outputs);
+
+        // HACK: add kkt inputs here...
+        if let Some(n_samples) = run_args.generate_explanation {
+            Self::add_kkt_nodes(&mut parsed_nodes, n_samples);
+        }
 
         let duration = start_time.elapsed();
         trace!("model loading took: {:?}", duration);
 
         Ok(parsed_nodes)
+    }
+
+    // TODO: maybe refactor out....
+    pub fn add_kkt_nodes(nodes: &mut ParsedNodes, n_samples: usize) {
+        assert!(nodes.inputs.len() == 1);
+        assert!(nodes.outputs.len() == 1);
+
+        let mut next_idx = nodes
+            .nodes
+            .iter() // get an iterator over the tree
+            .max_by_key(|p| p.0) // check the value of each pair for the max
+            .unwrap()
+            .0
+            + 1; // unwrap the result
+        let output_node = &nodes.nodes[&nodes.outputs[0].0].clone();
+        let input_node = &nodes.nodes[&nodes.inputs[0]].clone();
+        println!("input node: {:?}", input_node);
+
+        // TODO: should clean this up better...
+        // Honestly adding interface for proof modules that
+        // can re-use infrastructure would be nice...
+        let coeffs_input = NodeType::Node(Node {
+            opkind: SupportedOp::Input(Input {
+                scale: 12,
+                datum_type: InputType::F64,
+            }),
+            idx: next_idx,
+            out_scale: 12,
+            inputs: vec![],
+            out_dims: vec![input_node.out_dims()[0][1], 1],
+            num_uses: 1,
+        });
+        nodes.nodes.insert(coeffs_input.idx(), coeffs_input.clone());
+        //nodes.outputs.push((next_idx, 0));
+        nodes.inputs.push(next_idx);
+        next_idx += 1;
+
+        let intercept_input = NodeType::Node(Node {
+            opkind: SupportedOp::Input(Input {
+                scale: 12,
+                datum_type: InputType::F64,
+            }),
+            idx: next_idx,
+            out_scale: 12,
+            inputs: vec![],
+            out_dims: vec![1],
+            num_uses: 1,
+        });
+        nodes
+            .nodes
+            .insert(intercept_input.idx(), intercept_input.clone());
+        nodes.inputs.push(next_idx);
+        next_idx += 1;
     }
 
     /// Formats nodes (including subgraphs) into tables !
@@ -869,6 +994,7 @@ impl Model {
                     let om = Model {
                         graph: subgraph,
                         visibility: visibility.clone(),
+                        lime_module: None,
                     };
 
                     let out_dims = node_output_shapes(n, symbol_values)?;
@@ -1093,6 +1219,8 @@ impl Model {
         vars: &mut ModelVars<Fp>,
         witnessed_outputs: &[ValTensor<Fp>],
         constants: &mut ConstantsMap<Fp>,
+        lime_chip: &Lime2Chip,
+        // TODO: make cleanner...
     ) -> Result<Vec<ValTensor<Fp>>, GraphError> {
         info!("model layout...");
 
@@ -1171,6 +1299,7 @@ impl Model {
                                 witnessed_outputs[i].clone()
                             };
 
+                            println!("GOT: {:#?},\n\n {:#?}", output.clone(), comparators);
                             config
                                 .base
                                 .layout(
@@ -1185,6 +1314,25 @@ impl Model {
                         error!("{}", e);
                         halo2_proofs::plonk::Error::Synthesis
                     })?;
+
+                    if let Some(lime_module) = &self.lime_module {
+                        let inputs2 = results[&self.graph.inputs[0]][0].clone();
+                        let outputs = outputs[0].clone();
+                        println!("inputs: {:?}", inputs);
+                        println!("self.graph.inputs: {:?}", self.graph.inputs);
+                        let coeffs = results[&self.graph.inputs[1]][0].clone();
+                        let intercept = results[&self.graph.inputs[2]][0].clone();
+                        println!(
+                            "INPUTS: {:?}, INPUTS; {:?}, OUTPUTS: {:?}, COEFF: {:?}, INT: {:?}",
+                            inputs, inputs2, outputs, coeffs, intercept
+                        );
+                        lime_module.layout(
+                            &config.base,
+                            &mut thread_safe_region,
+                            &[inputs2, outputs, coeffs, intercept],
+                        );
+                    }
+                    //lime_chip.distance(&config.base, &mut thread_safe_region, inputs[0]);
                 }
                 // Then number of columns in the circuits
                 #[cfg(not(target_arch = "wasm32"))]
@@ -1249,6 +1397,7 @@ impl Model {
 
             match &node {
                 NodeType::Node(n) => {
+                    debug!("hi1: {:?}", n);
                     let res = if node.is_constant() && node.num_uses() == 1 {
                         log::debug!("node {} is a constant with 1 use", n.idx);
                         let mut node = n.clone();
@@ -1266,6 +1415,7 @@ impl Model {
                                 halo2_proofs::plonk::Error::Synthesis
                             })?
                     };
+                    debug!("hi2");
 
                     if let Some(mut vt) = res {
                         vt.reshape(&node.out_dims()[0])?;
@@ -1274,6 +1424,7 @@ impl Model {
                         //only use with mock prover
                         debug!("------------ output node {:?}: {:?}", idx, vt.show());
                     }
+                    debug!("hi3");
                 }
                 NodeType::SubGraph {
                     model,
@@ -1434,6 +1585,24 @@ impl Model {
             RegionCtx::new_dummy(0, run_args.num_inner_cols, witness_gen, check_lookup);
 
         let outputs = self.layout_nodes(&mut model_config, &mut region, &mut results)?;
+
+        if let Some(lime_module) = &self.lime_module {
+            let inputs2 = results[&self.graph.inputs[0]][0].clone();
+            let outputs = outputs[0].clone();
+            //println!("inputs: {:?}", inputs);
+            //println!("self.graph.inputs: {:?}", self.graph.inputs);
+            let coeffs = results[&self.graph.inputs[1]][0].clone();
+            let intercept = results[&self.graph.inputs[2]][0].clone();
+            //println!(
+            //    "INPUTS: {:?}, INPUTS; {:?}, OUTPUTS: {:?}, COEFF: {:?}, INT: {:?}",
+            //    inputs, inputs2, outputs, coeffs, intercept
+            //);
+            lime_module.layout(
+                &mut model_config.base,
+                &mut region,
+                &[inputs2, outputs, coeffs, intercept],
+            );
+        }
 
         if self.visibility.output.is_public() || self.visibility.output.is_fixed() {
             let output_scales = self.graph.get_output_scales()?;

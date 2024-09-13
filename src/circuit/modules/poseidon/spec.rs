@@ -2,10 +2,31 @@
 //! Specification for rate 5 Poseidon using the BN256 curve.
 //! Patterned after [halo2_gadgets::poseidon::primitives::P128Pow5T3]
 use halo2_gadgets::poseidon::primitives::*;
+use halo2_gadgets::poseidon::{primitives, Hash, Pow5Chip, Pow5Config};
 use halo2_proofs::arithmetic::Field;
 use halo2_proofs::halo2curves::bn256::Fr as Fp;
 
 use super::poseidon_params;
+
+pub trait HashableField<const WIDTH: usize, const RATE: usize> {
+    type PrimHash;
+    type CircHash;
+    type Spec;
+}
+
+impl HashableField<POSEIDON_WIDTH, POSEIDON_RATE> for Fp {
+    type PrimHash =
+        primitives::Hash<Fp, PoseidonSpec, ConstantLength<1>, POSEIDON_WIDTH, POSEIDON_RATE>;
+    type CircHash = Hash<
+        Fp,
+        Pow5Chip<Fp, POSEIDON_WIDTH, POSEIDON_RATE>,
+        PoseidonSpec,
+        ConstantLength<1>,
+        POSEIDON_WIDTH,
+        POSEIDON_RATE,
+    >;
+    type Spec = PoseidonSpec;
+}
 
 /// The specification for the Poseidon hash function.
 #[derive(Debug, Clone, Copy)]

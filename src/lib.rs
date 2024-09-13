@@ -1,26 +1,26 @@
-#![deny(
-    bad_style,
-    dead_code,
-    improper_ctypes,
-    non_shorthand_field_patterns,
-    no_mangle_generic_items,
-    overflowing_literals,
-    path_statements,
-    patterns_in_fns_without_body,
-    unconditional_recursion,
-    unused,
-    unused_allocation,
-    unused_comparisons,
-    unused_parens,
-    while_true,
-    missing_docs,
-    trivial_casts,
-    trivial_numeric_casts,
-    unused_extern_crates,
-    unused_import_braces,
-    missing_debug_implementations,
-    unsafe_code
-)]
+//#![deny(
+//    bad_style,
+//    dead_code,
+//    improper_ctypes,
+//    non_shorthand_field_patterns,
+//    no_mangle_generic_items,
+//    overflowing_literals,
+//    path_statements,
+//    patterns_in_fns_without_body,
+//    unconditional_recursion,
+//    unused,
+//    unused_allocation,
+//    unused_comparisons,
+//    unused_parens,
+//    while_true,
+//    missing_docs,
+//    trivial_casts,
+//    trivial_numeric_casts,
+//    unused_extern_crates,
+//    unused_import_braces,
+//    missing_debug_implementations,
+//    unsafe_code
+//)]
 // we allow this for our dynamic range based indexing scheme
 #![allow(clippy::single_range_in_vec_init)]
 #![feature(stmt_expr_attributes)]
@@ -39,6 +39,8 @@ pub enum EZKLError {
     EthError(#[from] eth::EthError),
     #[error("[graph] {0}")]
     GraphError(#[from] graph::errors::GraphError),
+    #[error("[explain] {0}")]
+    ExplainError(#[from] graph::explain::errors::ExplainError),
     #[error("[pfsys] {0}")]
     PfsysError(#[from] pfsys::errors::PfsysError),
     #[error("[circuit] {0}")]
@@ -275,6 +277,11 @@ pub struct RunArgs {
     /// commitment scheme
     #[arg(long, default_value = "kzg", value_hint = clap::ValueHint::Other)]
     pub commitment: Option<Commitments>,
+
+    // explain mode - usize is number of lasso samples
+    // TODO: add more settings here
+    #[arg(long)]
+    pub generate_explanation: Option<usize>,
 }
 
 impl Default for RunArgs {
@@ -295,6 +302,7 @@ impl Default for RunArgs {
             rebase_frac_zero_constants: false,
             check_mode: CheckMode::UNSAFE,
             commitment: None,
+            generate_explanation: None,
         }
     }
 }

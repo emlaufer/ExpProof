@@ -1,3 +1,5 @@
+use crate::circuit::ops::errors::CircuitError;
+use crate::tensor::errors::TensorError;
 use halo2_proofs::plonk::Error as PlonkError;
 use thiserror::Error;
 
@@ -16,6 +18,11 @@ pub enum ModuleError {
     /// Input length is wrong
     #[error("input length is wrong {0}")]
     InputWrongLength(usize),
+    /// GraphError
+    #[error("graph error: {0}")]
+    GraphError(#[from] CircuitError),
+    #[error("tensor error: {0}")]
+    TensorError(#[from] TensorError),
 }
 
 impl From<ModuleError> for PlonkError {

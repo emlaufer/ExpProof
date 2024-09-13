@@ -16,6 +16,7 @@ use maybe_rayon::{
 use self::tensor::{create_constant_tensor, create_zero_tensor, IntoI64};
 
 use super::{chip::BaseConfig, region::RegionCtx};
+use crate::graph::{dequantize, quantize_float};
 use crate::{
     circuit::{ops::base::BaseOp, utils},
     fieldutils::{felt_to_i64, i64_to_felt},
@@ -3833,7 +3834,12 @@ pub(crate) fn enforce_equality<
 ) -> Result<ValTensor<F>, CircuitError> {
     // assert of same len
     if values[0].len() != values[1].len() {
-        return Err(TensorError::DimMismatch("enforce_equality".to_string()).into());
+        return Err(TensorError::DimMismatch(format!(
+            "enforce equality: {} {}",
+            values[0].len(),
+            values[1].len()
+        ))
+        .into());
     }
 
     // assigns the instance to the advice.
@@ -4414,4 +4420,121 @@ pub fn range_check_percent<F: PrimeField + TensorType + PartialOrd + std::hash::
         &[rebased_product],
         &(-range_check_bracket_int, range_check_bracket_int),
     )
+}
+
+pub fn kkt<F: PrimeField + TensorType + PartialOrd + std::hash::Hash + IntoI64>(
+    config: &BaseConfig<F>,
+    region: &mut RegionCtx<F>,
+    values: &[ValTensor<F>; 4],
+    dim: usize,
+    alpha: utils::F32,
+    //input_scale: F,
+) -> Result<ValTensor<F>, CircuitError> {
+    // TODOS:
+    // 1. check_range will panic if value is out of range... this is a problem for first run
+    //    without the kkt checks
+    //      hacky soln: don't assign coeff_sign for values for first pass, then we can check and
+    //          abort
+    //      better soln: stub out "model" part and "other subgraph" part... basically module that
+    //      has access to the graph stuff...
+    //  2. need to scale everything appropriately for ops...
+    let inputs = &values[0];
+    let outputs = &values[1];
+    let coeffs = &values[2];
+    let intercept = &values[3];
+    log::debug!("input: {}", inputs.show());
+    log::debug!("coeffs: {}", coeffs.show());
+
+    log::debug!(
+        "scales!: {} {} {} {}",
+        inputs.scale(),
+        outputs.scale(),
+        coeffs.scale(),
+        intercept.scale()
+    );
+
+    let input_slice = slice(config, region, &[inputs.clone()], &0, &1, &(dim + 1))?;
+    log::debug!("input_slice: {}", input_slice.show());
+    let output_slice = slice(config, region, &[outputs.clone()], &0, &1, &(dim + 1))?;
+    log::debug!("output_slice: {}", output_slice.show());
+    let expanded_intercept = expand(config, region, &[intercept.clone()], &[dim])?;
+    log::debug!("expaneded_intercept: {}", expanded_intercept.show());
+
+    // doubles precision
+    let predictions = einsum(
+        config,
+        region,
+        &[input_slice.clone(), coeffs.clone()],
+        "ij,jk->ik",
+    )?;
+    log::debug!("predictions: {}", predictions.show());
+    let intermediate = pairwise(
+        config,
+        region,
+        &[output_slice.clone(), expanded_intercept],
+        BaseOp::Sub,
+    )?;
+    log::debug!("sub1: {}", intermediate.show());
+    // need to mult intermediate by scale diff...
+    let intermediate = pairwise(config, region, &[intermediate, predictions], BaseOp::Sub)?;
+    log::debug!("sub2: {}", intermediate.show());
+    let intermediate = einsum(
+        config,
+        region,
+        &[input_slice.clone(), intermediate.clone()],
+        "ji,jk->ik",
+    )?;
+    log::debug!("transpose einsum: {}", intermediate.show());
+
+    let is_assigned = !coeffs.any_unknowns()?;
+    let mut coeff_sign: ValTensor<F> = if is_assigned {
+        tensor::ops::nonlinearities::sign(&coeffs.get_int_evals()?)
+            .par_iter()
+            .map(|x| Value::known(i64_to_felt(*x)))
+            .collect::<Tensor<Value<F>>>()
+            .into()
+    } else {
+        Tensor::new(
+            Some(&vec![Value::<F>::unknown(); coeffs.len()]),
+            &[coeffs.len()],
+        )?
+        .into()
+    };
+    log::debug!("coeff_sign: {}", coeff_sign.show());
+
+    let equal_zero_mask = equals_zero(config, region, &[coeffs.clone()])?;
+    log::debug!("is zero: {}", equal_zero_mask.show());
+    log::debug!("mask len: {}", equal_zero_mask.len());
+
+    // TODO: need to ensure scale is high enough for good accuracy...
+    let alpha_quant: F = i64_to_felt(quantize_float(&(alpha.0 as f64), 0.0, inputs.scale())?);
+    let test = dequantize(alpha_quant, inputs.scale(), 0.0);
+    log::debug!("dequant alpha: {}", test);
+    let alphas = create_constant_tensor(alpha_quant, equal_zero_mask.len());
+    log::debug!("alphas: {}", alphas.show());
+
+    let signed_alphas = pairwise(config, region, &[coeff_sign, alphas], BaseOp::Mult)?;
+    log::debug!("signed alphas: {}", signed_alphas.show());
+
+    let intermediate = loop_div(
+        config,
+        region,
+        &[intermediate],
+        i64_to_felt::<F>(dim as i64),
+    )?;
+    log::debug!("div: {}", intermediate.show());
+
+    let intermediate = pairwise(config, region, &[intermediate, signed_alphas], BaseOp::Sub)?;
+    log::debug!("intermediate: {}", intermediate.show());
+
+    let range_bracket = felt_to_i64(alpha_quant);
+    let alpha_test = range_check(
+        config,
+        region,
+        &[intermediate],
+        &(-range_bracket, range_bracket),
+    )?;
+    log::debug!("alpha test: {}", alpha_test.show());
+
+    Ok(intercept.clone())
 }

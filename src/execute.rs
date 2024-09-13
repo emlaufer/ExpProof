@@ -6,6 +6,7 @@ use crate::eth::{deploy_contract_via_solidity, deploy_da_verifier_via_solidity};
 #[cfg(not(target_arch = "wasm32"))]
 #[allow(unused_imports)]
 use crate::eth::{fix_da_sol, get_contract_artifacts, verify_proof_via_solidity};
+use crate::graph::explain::{ExplainCircuit, ExplainWitness};
 use crate::graph::input::GraphData;
 use crate::graph::{GraphCircuit, GraphSettings, GraphWitness, Model};
 #[cfg(not(target_arch = "wasm32"))]
@@ -168,6 +169,19 @@ pub async fn run(command: Commands) -> Result<String, EZKLError> {
         )
         .await
         .map(|e| serde_json::to_string(&e).unwrap()),
+        Commands::Infer {
+            data,
+            compiled_circuit,
+            output,
+        } => {
+            let res = infer(
+                compiled_circuit.unwrap_or(DEFAULT_COMPILED_CIRCUIT.into()),
+                data.unwrap_or(DEFAULT_DATA.into()),
+                Some(output.unwrap_or(DEFAULT_WITNESS.into())),
+            )
+            .await;
+            Ok("good".to_string())
+        }
         Commands::GenWitness {
             data,
             compiled_circuit,
@@ -183,6 +197,23 @@ pub async fn run(command: Commands) -> Result<String, EZKLError> {
         )
         .await
         .map(|e| serde_json::to_string(&e).unwrap()),
+        Commands::GenWitnessExplanation {
+            data,
+            compiled_circuit,
+            output,
+            vk_path,
+            srs_path,
+        } => {
+            let test = gen_explain_witness(
+                compiled_circuit.unwrap_or(DEFAULT_COMPILED_CIRCUIT.into()),
+                data.unwrap_or(DEFAULT_DATA.into()),
+                Some(output.unwrap_or(DEFAULT_WITNESS.into())),
+                vk_path,
+                srs_path,
+            )
+            .await;
+            Ok("Hi".to_string())
+        }
         Commands::Mock { model, witness } => mock(
             model.unwrap_or(DEFAULT_MODEL.into()),
             witness.unwrap_or(DEFAULT_WITNESS.into()),
@@ -351,6 +382,24 @@ pub async fn run(command: Commands) -> Result<String, EZKLError> {
             check_mode.unwrap_or(DEFAULT_CHECKMODE.parse().unwrap()),
         )
         .map(|e| serde_json::to_string(&e).unwrap()),
+        Commands::ProveExplain {
+            witness,
+            compiled_circuit,
+            pk_path,
+            proof_path,
+            srs_path,
+            proof_type,
+            check_mode,
+        } => prove_explain(
+            witness.unwrap_or(DEFAULT_WITNESS.into()),
+            compiled_circuit.unwrap_or(DEFAULT_COMPILED_CIRCUIT.into()),
+            pk_path.unwrap_or(DEFAULT_PK.into()),
+            Some(proof_path.unwrap_or(DEFAULT_PROOF.into())),
+            srs_path,
+            proof_type,
+            check_mode.unwrap_or(DEFAULT_CHECKMODE.parse().unwrap()),
+        )
+        .map(|e| serde_json::to_string(&e).unwrap()),
         Commands::MockAggregate {
             aggregation_snarks,
             logrows,
@@ -508,6 +557,13 @@ pub async fn run(command: Commands) -> Result<String, EZKLError> {
         }
         #[cfg(not(feature = "no-update"))]
         Commands::Update { version } => update_ezkl_binary(&version).map(|e| e.to_string()),
+        Commands::Export { compiled_circuit } => {
+            // TODO:....
+            let compiled_circuit_path = compiled_circuit.unwrap_or(DEFAULT_COMPILED_CIRCUIT.into());
+            let circuit = GraphCircuit::load(compiled_circuit_path)?;
+            println!("MODEL IS: {:?}", circuit);
+            Ok("Good".to_string())
+        }
     }
 }
 
@@ -752,6 +808,131 @@ pub(crate) fn table(model: PathBuf, run_args: RunArgs) -> Result<String, EZKLErr
     let model = Model::from_run_args(&run_args, &model)?;
     info!("\n {}", model.table_nodes());
     Ok(String::new())
+}
+
+pub(crate) async fn gen_explain_witness(
+    compiled_circuit_path: PathBuf,
+    data: PathBuf,
+    output: Option<PathBuf>,
+    vk_path: Option<PathBuf>,
+    srs_path: Option<PathBuf>,
+) -> Result<(), EZKLError> {
+    // these aren't real values so the sanity checks are mostly meaningless
+
+    let mut graph_circuit = GraphCircuit::load(compiled_circuit_path)?;
+    let mut circuit = ExplainCircuit::new(graph_circuit)?;
+    let data: GraphData = GraphData::from_path(data)?;
+    let settings = circuit.graph.settings().clone();
+
+    let vk = if let Some(vk) = vk_path {
+        Some(load_vk::<KZGCommitmentScheme<Bn256>, GraphCircuit>(
+            vk,
+            settings.clone(),
+        )?)
+    } else {
+        None
+    };
+
+    let mut input = circuit.load_graph_input(&data).await?;
+    let mut lime_samples = circuit.generate_lime_samples(&input)?;
+
+    let mut input = crate::graph::explain::ExplainInput {
+        point: input,
+        samples: lime_samples,
+    };
+
+    let commitment: Commitments = settings.run_args.commitment.into();
+
+    let start_time = Instant::now();
+    let witness = if settings.module_requires_polycommit() {
+        if get_srs_path(settings.run_args.logrows, srs_path.clone(), commitment).exists() {
+            match Commitments::from(settings.run_args.commitment) {
+                Commitments::KZG => {
+                    let srs: ParamsKZG<Bn256> = load_params_prover::<KZGCommitmentScheme<Bn256>>(
+                        srs_path.clone(),
+                        settings.run_args.logrows,
+                        commitment,
+                    )?;
+                    circuit.forward::<KZGCommitmentScheme<_>>(
+                        &mut input,
+                        vk.as_ref(),
+                        Some(&srs),
+                        true,
+                        true,
+                    )?
+                }
+                Commitments::IPA => {
+                    let srs: ParamsIPA<G1Affine> =
+                        load_params_prover::<IPACommitmentScheme<G1Affine>>(
+                            srs_path.clone(),
+                            settings.run_args.logrows,
+                            commitment,
+                        )?;
+                    circuit.forward::<IPACommitmentScheme<_>>(
+                        &mut input,
+                        vk.as_ref(),
+                        Some(&srs),
+                        true,
+                        true,
+                    )?
+                }
+            }
+        } else {
+            warn!("SRS for poly commit does not exist (will be ignored)");
+            circuit.forward::<KZGCommitmentScheme<Bn256>>(
+                &mut input,
+                vk.as_ref(),
+                None,
+                true,
+                true,
+            )?
+        }
+    } else {
+        circuit.forward::<KZGCommitmentScheme<Bn256>>(&mut input, vk.as_ref(), None, true, true)?
+    };
+
+    // print each variable tuple (symbol, value) as symbol=value
+    //trace!(
+    //    "witness generation {:?} took {:?}",
+    //    circuit
+    //        .settings()
+    //        .run_args
+    //        .variables
+    //        .iter()
+    //        .map(|v| { format!("{}={}", v.0, v.1) })
+    //        .collect::<Vec<_>>(),
+    //    start_time.elapsed()
+    //);
+
+    //if let Some(output_path) = output {
+    //    witness.save(output_path)?;
+    //}
+
+    //// print the witness in debug
+    //debug!("witness: \n {}", witness.as_json()?.to_colored_json_auto()?);
+
+    //Ok(witness)
+
+    return Ok(());
+}
+
+use crate::tensor::{Tensor, ValTensor};
+use halo2curves::bn256::{self, Fr as Fp};
+pub(crate) async fn infer(
+    compiled_circuit_path: PathBuf,
+    data: PathBuf,
+    output: Option<PathBuf>,
+) -> Result<Vec<Tensor<Fp>>, EZKLError> {
+    let mut circuit = GraphCircuit::load(compiled_circuit_path)?;
+    let data: GraphData = GraphData::from_path(data)?;
+    let settings = circuit.settings().clone();
+
+    let mut input = circuit.load_graph_input(&data).await?;
+
+    Ok(circuit
+        .model()
+        .forward(&input, &circuit.settings().run_args, false, false)
+        .map(|res| res.outputs)?)
 }
 
 pub(crate) async fn gen_witness(
@@ -2026,6 +2207,27 @@ pub(crate) fn prove(
     }
 
     Ok(snark)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn prove_explain(
+    data_path: PathBuf,
+    compiled_circuit_path: PathBuf,
+    pk_path: PathBuf,
+    proof_path: Option<PathBuf>,
+    srs_path: Option<PathBuf>,
+    proof_type: ProofType,
+    check_mode: CheckMode,
+) -> Result<Snark<Fr, G1Affine>, EZKLError> {
+    let data = GraphWitness::from_path(data_path)?;
+    let mut circuit = GraphCircuit::load(compiled_circuit_path)?;
+
+    circuit.load_graph_witness(&data)?;
+
+    // TODO:
+
+    unimplemented!();
 }
 
 pub(crate) fn swap_proof_commitments_cmd(

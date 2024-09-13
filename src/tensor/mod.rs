@@ -17,6 +17,7 @@ use maybe_rayon::{
     },
     slice::ParallelSliceMut,
 };
+use ndarray::{ArrayBase, Data};
 use serde::{Deserialize, Serialize};
 pub use val::*;
 pub use var::*;
@@ -700,6 +701,14 @@ impl<T: Clone + TensorType> Tensor<T> {
         Tensor::new(Some(&inner), &[inner.len()])
     }
 
+    // TODO: make this more general....
+    pub fn pad_rows(&self, n: usize, pad: T) -> Result<Tensor<T>, TensorError> {
+        let mut inner = self.inner.clone();
+        let d = self.dims()[1];
+        inner.resize(n * d, pad);
+        Tensor::new(Some(&inner), &[n, d])
+    }
+
     /// Get a single value from the Tensor.
     ///
     /// ```
@@ -1308,6 +1317,45 @@ impl<T: Clone + TensorType> Tensor<T> {
     }
 }
 
+use crate::graph::utilities::{dequantize, quantize_float};
+impl Tensor<f64> {
+    pub fn quantize<F>(&self, scale: crate::Scale) -> Result<Tensor<F>, TensorError>
+    where
+        F: TensorType + PrimeField + PartialOrd + Field,
+    {
+        self.par_enum_map(|i, v| {
+            let v_as_int = quantize_float(&v, 0.0, scale)?;
+            Ok(i64_to_felt::<F>(v_as_int))
+        })
+    }
+}
+
+impl<F: TensorType + PrimeField + PartialOrd + Field> Tensor<F> {
+    pub fn dequantize(&self, scale: crate::Scale) -> Tensor<f64> {
+        self.par_enum_map(|i, v| Ok::<f64, TensorError>(dequantize(v, scale, 0.0)))
+            .unwrap()
+    }
+}
+
+impl<T: Clone + TensorType> Tensor<T> {
+    // Cannot use From trait due to From impl...
+    pub fn from_ndarray<E: Data, D: ndarray::Dimension>(
+        array: &ArrayBase<E, D>,
+    ) -> Result<Self, TensorError>
+    where
+        E::Elem: Into<T> + Clone,
+    {
+        let dims = array.shape();
+
+        Ok(Tensor {
+            inner: array.iter().map(|e| e.clone().into()).collect::<Vec<_>>(),
+            dims: Vec::from(dims),
+            scale: None,
+            visibility: None,
+        })
+    }
+}
+
 #[cfg(feature = "metal")]
 #[allow(unsafe_code)]
 /// Perform a tensor operation on the GPU using Metal.
@@ -1587,6 +1635,24 @@ impl<T: TensorType + Sub<Output = T> + std::marker::Send + std::marker::Sync + I
                 .map(|(o, r)| o.clone() - r)
                 .collect();
             res.reshape(&broadcasted_shape).unwrap();
+            res
+        };
+
+        Ok(res)
+    }
+}
+
+impl<T: TensorType + Mul<Output = T> + std::marker::Send + std::marker::Sync + IntoI64> Mul<T>
+    for Tensor<T>
+{
+    type Output = Result<Tensor<T>, TensorError>;
+    /// Broadcast multiplies tensors.
+    fn mul(self, rhs: T) -> Self::Output {
+        let lhs = self;
+        let rhs = &rhs;
+        let res = {
+            let mut res: Tensor<T> = lhs.par_iter().map(|o| o.clone() * rhs.clone()).collect();
+            res.reshape(&lhs.dims()).unwrap();
             res
         };
 

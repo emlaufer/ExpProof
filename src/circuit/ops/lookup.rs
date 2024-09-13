@@ -117,6 +117,7 @@ pub enum LookupOp {
         a: utils::F32,
     },
     Sign,
+    IsZero,
     KroneckerDelta,
     Pow {
         scale: utils::F32,
@@ -166,6 +167,7 @@ impl LookupOp {
                 a.0.into(),
             )),
             LookupOp::Sign => Ok(tensor::ops::nonlinearities::sign(&x)),
+            LookupOp::IsZero => Ok(tensor::ops::nonlinearities::is_zero(&x)),
             LookupOp::LessThan { a } => Ok(tensor::ops::nonlinearities::less_than(
                 &x,
                 f32::from(*a).into(),
@@ -252,6 +254,7 @@ impl<F: PrimeField + TensorType + PartialOrd + std::hash::Hash + IntoI64> Op<F> 
             LookupOp::Max { scale, a } => format!("MAX(scale={}, a={})", scale, a),
             LookupOp::Min { scale, a } => format!("MIN(scale={}, a={})", scale, a),
             LookupOp::Sign => "SIGN".into(),
+            LookupOp::IsZero => "IS_ZERO".into(),
             LookupOp::GreaterThan { a } => format!("GREATER_THAN(a={})", a),
             LookupOp::GreaterThanEqual { a } => format!("GREATER_THAN_EQUAL(a={})", a),
             LookupOp::LessThan { a } => format!("LESS_THAN(a={})", a),

@@ -332,8 +332,39 @@ pub enum Commands {
         args: RunArgs,
     },
 
+    Infer {
+        /// The path to the .json data file
+        #[arg(short = 'D', long, default_value = DEFAULT_DATA, value_hint = clap::ValueHint::FilePath)]
+        data: Option<PathBuf>,
+        /// The path to the compiled model file (generated using the compile-circuit command)
+        #[arg(short = 'M', long, default_value = DEFAULT_COMPILED_CIRCUIT, value_hint = clap::ValueHint::FilePath)]
+        compiled_circuit: Option<PathBuf>,
+        /// Path to output the witness .json file
+        #[arg(short = 'O', long, default_value = DEFAULT_WITNESS, value_hint = clap::ValueHint::FilePath)]
+        output: Option<PathBuf>,
+    },
+
     /// Generates the witness from an input file.
     GenWitness {
+        /// The path to the .json data file
+        #[arg(short = 'D', long, default_value = DEFAULT_DATA, value_hint = clap::ValueHint::FilePath)]
+        data: Option<PathBuf>,
+        /// The path to the compiled model file (generated using the compile-circuit command)
+        #[arg(short = 'M', long, default_value = DEFAULT_COMPILED_CIRCUIT, value_hint = clap::ValueHint::FilePath)]
+        compiled_circuit: Option<PathBuf>,
+        /// Path to output the witness .json file
+        #[arg(short = 'O', long, default_value = DEFAULT_WITNESS, value_hint = clap::ValueHint::FilePath)]
+        output: Option<PathBuf>,
+        /// Path to the verification key file (optional - solely used to generate kzg commits)
+        #[arg(short = 'V', long, value_hint = clap::ValueHint::FilePath)]
+        vk_path: Option<PathBuf>,
+        /// Path to the srs file (optional - solely used to generate kzg commits)
+        #[arg(short = 'P', long, value_hint = clap::ValueHint::FilePath)]
+        srs_path: Option<PathBuf>,
+    },
+
+    /// Generates the witness from an input file.
+    GenWitnessExplanation {
         /// The path to the .json data file
         #[arg(short = 'D', long, default_value = DEFAULT_DATA, value_hint = clap::ValueHint::FilePath)]
         data: Option<PathBuf>,
@@ -633,6 +664,38 @@ pub enum Commands {
         #[arg(long, default_value = DEFAULT_CHECKMODE, value_hint = clap::ValueHint::Other)]
         check_mode: Option<CheckMode>,
     },
+
+    /// Loads model, data, and creates proof
+    ProveExplain {
+        /// The path to the .json witness file (generated using the gen-witness command)
+        #[arg(short = 'W', long, default_value = DEFAULT_WITNESS, value_hint = clap::ValueHint::FilePath)]
+        witness: Option<PathBuf>,
+        /// The path to the compiled model file (generated using the compile-circuit command)
+        #[arg(short = 'M', long, default_value = DEFAULT_COMPILED_CIRCUIT, value_hint = clap::ValueHint::FilePath)]
+        compiled_circuit: Option<PathBuf>,
+        /// The path to load the desired proving key file (generated using the setup command)
+        #[arg(long, default_value = DEFAULT_PK, value_hint = clap::ValueHint::FilePath)]
+        pk_path: Option<PathBuf>,
+        /// The path to output the proof file to
+        #[arg(long, default_value = DEFAULT_PROOF, value_hint = clap::ValueHint::FilePath)]
+        proof_path: Option<PathBuf>,
+        /// The path to SRS, if None will use $EZKL_REPO_PATH/srs/kzg{logrows}.srs
+        #[arg(long, value_hint = clap::ValueHint::FilePath)]
+        srs_path: Option<PathBuf>,
+        #[arg(
+            long,
+            require_equals = true,
+            num_args = 0..=1,
+            default_value_t = ProofType::Single,
+            value_enum, 
+            value_hint = clap::ValueHint::Other
+        )]
+        proof_type: ProofType,
+        /// run sanity checks during calculations (safe or unsafe)
+        #[arg(long, default_value = DEFAULT_CHECKMODE, value_hint = clap::ValueHint::Other)]
+        check_mode: Option<CheckMode>,
+    },
+
     #[cfg(not(target_arch = "wasm32"))]
     /// Encodes a proof into evm calldata
     #[command(name = "encode-evm-calldata")]
@@ -874,6 +937,11 @@ pub enum Commands {
         /// The version to update to
         #[arg(value_hint = clap::ValueHint::Other, short='v', long)]
         version: Option<String>,
+    },
+    Export {
+        /// The path to the compiled model file (generated using the compile-circuit command)
+        #[arg(short = 'M', long, default_value = DEFAULT_COMPILED_CIRCUIT, value_hint = clap::ValueHint::FilePath)]
+        compiled_circuit: Option<PathBuf>,
     },
 }
 

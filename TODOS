@@ -1,0 +1,9 @@
+1. Normal lookup table
+    - test that lookups work...
+2. Feed in random values into normal lookup table
+    - test that it works...
+3. 
+
+
+Later:
+1. Input visibility public causes some errors.. fix by constrainign public ahead of model layout...

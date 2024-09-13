@@ -1,7 +1,7 @@
 use thiserror::Error;
 
 /// A wrapper for tensor related errors.
-#[derive(Debug, Error)]
+#[derive(Debug, Error, Clone)]
 pub enum TensorError {
     /// Shape mismatch in a operation
     #[error("dimension mismatch in tensor op: {0}")]

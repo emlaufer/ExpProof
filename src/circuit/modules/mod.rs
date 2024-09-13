@@ -1,14 +1,23 @@
 ///
 pub mod poseidon;
 
+pub mod normal;
+pub mod sample;
+
+pub mod perturb;
+
 ///
 pub mod polycommit;
 
 ///
 pub mod planner;
 
+pub mod lime;
+pub mod lime2;
+
 ///
 pub mod errors;
+pub mod utilities;
 
 use halo2_proofs::{circuit::Layouter, plonk::ConstraintSystem};
 use halo2curves::ff::PrimeField;
@@ -56,4 +65,34 @@ pub trait Module<F: PrimeField + TensorType + PartialOrd> {
     fn instance_increment_input(&self) -> Vec<usize>;
     /// Number of rows used by the module
     fn num_rows(input_len: usize) -> usize;
+}
+
+use super::{chip::BaseConfig, region::RegionCtx};
+
+// EZKL module that is implemented as part of the model compute graph
+pub trait GraphModule<F: PrimeField + TensorType + PartialOrd + std::hash::Hash> {
+    /// Config
+    type Config;
+    /// The return type after an input assignment
+    type InputAssignments;
+    /// The inputs used in the run function
+    type RunInputs;
+    /// The params used in configure
+    type Params;
+
+    /// construct new module from config
+    fn new(config: Self::Config) -> Self;
+    /// Configure
+    fn configure(params: Self::Params) -> Self::Config;
+    /// Name
+    fn name(&self) -> &'static str;
+    /// Run the operation the module represents
+    fn run(input: Self::RunInputs) -> Result<Vec<Vec<F>>, errors::ModuleError>;
+    /// Layout
+    fn layout(
+        &self,
+        config: &BaseConfig<F>,
+        region: &mut RegionCtx<F>,
+        input: &[ValTensor<F>],
+    ) -> Result<ValTensor<F>, errors::ModuleError>;
 }

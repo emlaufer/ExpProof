@@ -69,6 +69,10 @@ pub enum HybridOp {
         dim: usize,
         num_classes: usize,
     },
+    KKT {
+        dim: usize,
+        alpha: utils::F32,
+    },
 }
 
 impl<F: PrimeField + TensorType + PartialOrd + std::hash::Hash + IntoI64> Op<F> for HybridOp {
@@ -77,6 +81,7 @@ impl<F: PrimeField + TensorType + PartialOrd + std::hash::Hash + IntoI64> Op<F> 
         match self {
             HybridOp::Greater | HybridOp::Less | HybridOp::Equals => vec![0, 1],
             HybridOp::GreaterEqual | HybridOp::LessEqual => vec![0, 1],
+            HybridOp::KKT { .. } => vec![0, 1, 2, 3],
             _ => vec![],
         }
     }
@@ -146,6 +151,9 @@ impl<F: PrimeField + TensorType + PartialOrd + std::hash::Hash + IntoI64> Op<F> 
             }
             HybridOp::OneHot { dim, num_classes } => {
                 format!("ONEHOT (dim={}, num_classes={})", dim, num_classes)
+            }
+            HybridOp::KKT { dim, alpha } => {
+                format!("KKT (dim={}, alpha={})", dim, alpha)
             }
         }
     }
@@ -283,6 +291,9 @@ impl<F: PrimeField + TensorType + PartialOrd + std::hash::Hash + IntoI64> Op<F> 
             }
             HybridOp::OneHot { dim, num_classes } => {
                 layouts::one_hot_axis(config, region, values[..].try_into()?, *num_classes, *dim)?
+            }
+            HybridOp::KKT { dim, alpha } => {
+                layouts::kkt(config, region, values[..].try_into()?, *dim, *alpha)?
             }
         }))
     }

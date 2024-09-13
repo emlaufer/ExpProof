@@ -14,6 +14,11 @@ pub mod utilities;
 /// Representations of a computational graph's variables.
 pub mod vars;
 
+pub mod lime;
+
+/// Explanation circuit definition
+pub mod explain;
+
 /// errors for the graph
 pub mod errors;
 
@@ -25,6 +30,7 @@ use halo2_proofs::plonk::VerifyingKey;
 use halo2_proofs::poly::commitment::CommitmentScheme;
 pub use input::DataSource;
 use itertools::Itertools;
+use rand::{thread_rng, Rng};
 use tosubcommand::ToFlags;
 
 use self::errors::GraphError;
@@ -34,10 +40,15 @@ use self::input::{FileSource, GraphData};
 use self::modules::{GraphModules, ModuleConfigs, ModuleForwardResult, ModuleSizes};
 use crate::circuit::lookup::LookupOp;
 use crate::circuit::modules::ModulePlanner;
+use crate::circuit::modules::{
+    lime::{LimeConfig, LimeInputs, LimeModule},
+    perturb::{PerturbChip, PerturbConfig},
+    GraphModule, Module,
+};
 use crate::circuit::region::ConstantsMap;
 use crate::circuit::table::{num_cols_required, Range, Table, RESERVED_BLINDING_ROWS_PAD};
 use crate::circuit::{CheckMode, InputType};
-use crate::fieldutils::felt_to_f64;
+use crate::fieldutils::{felt_to_f64, i64_to_felt};
 use crate::pfsys::PrettyElements;
 use crate::tensor::{Tensor, ValTensor};
 use crate::{RunArgs, EZKL_BUF_CAPACITY};
@@ -50,6 +61,7 @@ use halo2curves::bn256::{self, Fr as Fp, G1Affine};
 use halo2curves::ff::{Field, PrimeField};
 #[cfg(not(target_arch = "wasm32"))]
 use lazy_static::lazy_static;
+pub use lime::*;
 use log::{debug, error, trace, warn};
 use maybe_rayon::prelude::{IntoParallelRefIterator, ParallelIterator};
 pub use model::*;
@@ -131,6 +143,9 @@ pub struct GraphWitness {
     pub min_lookup_inputs: i64,
     /// max range check size
     pub max_range_size: i64,
+    // TODO: potentially refactor
+    pub lime_model: Option<Vec<Vec<Fp>>>,
+    pub local_surrogate: Option<Vec<Fp>>,
 }
 
 impl GraphWitness {
@@ -159,6 +174,8 @@ impl GraphWitness {
             max_lookup_inputs: 0,
             min_lookup_inputs: 0,
             max_range_size: 0,
+            lime_model: None,
+            local_surrogate: None,
         }
     }
 
@@ -432,6 +449,9 @@ pub struct GraphSettings {
     pub num_blinding_factors: Option<usize>,
     /// unix time timestamp
     pub timestamp: Option<u128>,
+
+    // TODO: is this somewhere else...
+    pub d: usize,
 }
 
 impl GraphSettings {
@@ -603,12 +623,16 @@ impl GraphSettings {
     }
 }
 
+use crate::circuit::modules::lime2::Lime2Chip;
 /// Configuration for a computational graph / model loaded from a `.onnx` file.
 #[derive(Clone, Debug)]
 pub struct GraphConfig {
     model_config: ModelConfig,
     module_configs: ModuleConfigs,
     circuit_size: CircuitSize,
+
+    // lime stuff
+    pub lime_chip: Lime2Chip,
 }
 
 /// Defines the circuit for a computational graph / model loaded from a `.onnx` file.
@@ -902,17 +926,42 @@ impl GraphCircuit {
 
     ///
     #[cfg(not(target_arch = "wasm32"))]
-    pub async fn load_graph_input(
-        &mut self,
-        data: &GraphData,
-    ) -> Result<Vec<Tensor<Fp>>, GraphError> {
-        let shapes = self.model().graph.input_shapes()?;
+    pub async fn load_graph_input(&self, data: &GraphData) -> Result<Vec<Tensor<Fp>>, GraphError> {
+        let mut shapes = self.model().graph.input_shapes()?;
         let scales = self.model().graph.get_input_scales();
         let input_types = self.model().graph.get_input_types()?;
         debug!("input scales: {:?}", scales);
 
-        self.process_data_source(&data.input_data, shapes, scales, input_types)
-            .await
+        // we generate samples ourselves...don't load as input...
+        // TODO: more than one input?
+        // TODO: constants...
+        // FIXME(EVAN)
+        if let Some(num_samples) = self.settings().run_args.generate_explanation {
+            shapes[0][0] -= (num_samples + 10 + 1);
+        }
+
+        let mut data = self
+            .process_data_source(
+                &data.input_data,
+                shapes.clone(),
+                scales.clone(),
+                input_types,
+            )
+            .await?;
+        if let Some(num_samples) = self.settings().run_args.generate_explanation {
+
+            //let mut samples =
+            //    PerturbChip::run((data[0].to_vec(), num_samples)).unwrap()[0].to_owned();
+            //let input_shapes = self.model().graph.input_shapes()?;
+            //let mut data_vec = data[0].to_vec();
+            //data_vec.append(&mut samples);
+            //let mut data_vec: Tensor<Fp> = data_vec.into_iter().into();
+            //data_vec.reshape(&input_shapes[0]).unwrap();
+            //data[0] = data_vec;
+            //println!("GOT SAMPLES: {:?}", data[0]);
+        }
+
+        Ok(data)
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -935,7 +984,7 @@ impl GraphCircuit {
     #[cfg(not(target_arch = "wasm32"))]
     /// Process the data source for the model
     async fn process_data_source(
-        &mut self,
+        &self,
         data: &DataSource,
         shapes: Vec<Vec<usize>>,
         scales: Vec<crate::Scale>,
@@ -964,7 +1013,7 @@ impl GraphCircuit {
     /// Prepare on chain test data
     #[cfg(not(target_arch = "wasm32"))]
     pub async fn load_on_chain_data(
-        &mut self,
+        &self,
         source: OnChainSource,
         shapes: &Vec<Vec<usize>>,
         scales: Vec<crate::Scale>,
@@ -987,7 +1036,7 @@ impl GraphCircuit {
 
     ///
     pub fn load_file_data(
-        &mut self,
+        &self,
         file_data: &FileSource,
         shapes: &Vec<Vec<usize>>,
         scales: Vec<crate::Scale>,
@@ -1272,9 +1321,115 @@ impl GraphCircuit {
             }
         }
 
-        let mut model_results =
-            self.model()
-                .forward(inputs, &self.settings().run_args, witness_gen, check_lookup)?;
+        let mut model_inputs = inputs.to_vec();
+        let mut inputs = inputs.to_vec();
+        //// compute lime perturbations and model
+        let lime_model = if let Some(n_samples) = self.settings().run_args.generate_explanation {
+            // generate perturbations of input
+            // TODO:replace with surrogate...
+            let d = inputs[0].dims()[1];
+            let surrogate_samples = 10;
+            println!("START");
+
+            let d = inputs[0].dims()[1];
+            let batch_size = self.model().graph.input_shapes().unwrap()[0][0];
+            // TODO: move this elsewhere?
+            // This closure accepts batches of any size for inferrence
+            let classify = |mut batch: Tensor<Fp>| {
+                println!("batch: {:?}", batch.dims());
+                let mut n = batch.dims()[0];
+                let mut i = 0;
+
+                let mut output = vec![];
+                while n > 0 {
+                    let mini_batch = if n < batch_size {
+                        let mini_batch = batch
+                            .get_slice(&[i * batch_size..batch.dims()[0], 0..d])
+                            .unwrap();
+                        mini_batch.pad_rows(batch_size, Fp::zero()).unwrap()
+                    } else {
+                        batch
+                            .get_slice(&[i * batch_size..(i + 1) * batch_size, 0..d])
+                            .unwrap()
+                    };
+
+                    // TODO pad the batch.... then we can handle it...
+                    let mut fresh_inputs = inputs.to_vec();
+                    fresh_inputs[0] = mini_batch;
+
+                    let res = self.model().forward(
+                        &fresh_inputs,
+                        &self.settings().run_args,
+                        false,
+                        false,
+                    )?;
+                    output.extend(
+                        res.outputs[0]
+                            .get_slice(&[0..(std::cmp::min(n, batch_size))])
+                            .unwrap()
+                            .to_vec()
+                            .clone(),
+                    );
+                    n = if n < batch_size { 0 } else { n - batch_size };
+                    i += 1;
+                }
+
+                println!("OUTPUT: {:?}", output);
+                Ok(Tensor::new(Some(&output), &[batch.dims()[0]]).unwrap())
+            };
+
+            use crate::circuit::modules::sample::SampleChip;
+            let samples = SampleChip::<8>::run((n_samples + surrogate_samples) * d).unwrap();
+            // TODO: compute samples via our hash function....
+            let perturb = |x: Tensor<Fp>| {
+                let d = x.dims()[1];
+                x.expand(&[n_samples, d]).unwrap();
+                // get first n*d samples
+                let y = Tensor::new(Some(&samples[0..n_samples * d]), &[n_samples, d]).unwrap();
+                let add = (x + y).unwrap();
+                let res = add
+                    .par_enum_map::<_, _, GraphError>(|i, v| Ok(v - Fp::from(256)))
+                    .unwrap();
+                println!("PERTURBED X_BORDER: {:?}", res);
+                res
+            };
+
+            // TODO: change structure
+            let input = inputs[0].get_slice(&[0..1, 0..d]).unwrap();
+
+            // add surrogate point to inputs...
+            // TODO: fix
+            let model =
+                LassoModel::compute_surrogate_model(classify, perturb, &input, 7, 0, 10, 10);
+
+            let samples = Lime2Chip::run(
+                inputs[0].to_vec(),
+                model.local_surrogate.to_vec(),
+                n_samples,
+                surrogate_samples,
+                d,
+            )
+            .unwrap();
+            println!("samples: {:?}", samples);
+            println!("surrogate: {:?}", model.local_surrogate);
+            model_inputs[0] =
+                Tensor::new(Some(&samples), &[n_samples + surrogate_samples + 2, d]).unwrap();
+            println!("END");
+
+            Some(model)
+        } else {
+            None
+        };
+        let local_surrogate = lime_model.clone().map(|m| m.local_surrogate.to_vec());
+        println!("MODEL IS: {:?}", lime_model);
+
+        let mut model_results = self.model().forward(
+            &model_inputs,
+            &self.settings().run_args,
+            witness_gen,
+            check_lookup,
+        )?;
+        println!("TEST: {:?}", inputs);
 
         if visibility.output.requires_processing() {
             let module_outlets = visibility.output.overwrites_inputs();
@@ -1301,12 +1456,43 @@ impl GraphCircuit {
                 )?);
             }
         }
+        let mut inputs = inputs.iter().map(|t| t.deref().to_vec()).collect_vec();
+        let mut input_scales = self.model().graph.get_input_scales();
+        let mut output_scales = self.model().graph.get_output_scales()?;
+
+        let lime_model = None;
+        // TODO: move into model probably...
+        //let lime_model = if let Some(n_samples) = self.settings().run_args.generate_explanation {
+        //    // ensure input well shaped, and only make model on perturbed samples
+        //    let input_dim = original_inputs[0].dims();
+        //    let lime_inputs = original_inputs[0].get_slice(&[1..input_dim[0], 0..input_dim[1]])?;
+
+        //    let output_dim = model_results.outputs[0].dims();
+        //    let lime_outputs = model_results.outputs[0].get_slice(&[1..output_dim[0]])?;
+        //    println!("INPUT SCALES: {:?}", input_scales);
+
+        //    let lime_inputs = LimeInputs {
+        //        inputs: lime_inputs,
+        //        outputs: lime_outputs,
+        //        input_scale: input_scales[0],
+        //        output_scale: output_scales[0],
+        //        out_scale: input_scales[1],
+        //    };
+        //    let lime_model = LimeModule::run(lime_inputs).unwrap();
+
+        //    inputs[1] = (lime_model[0].clone());
+        //    inputs[2] = (lime_model[1].clone());
+
+        //    input_scales.push(input_scales[0]);
+        //    input_scales.push(input_scales[0]);
+
+        //    Some(lime_model)
+        //} else {
+        //    None
+        //};
 
         let mut witness = GraphWitness {
-            inputs: original_inputs
-                .iter()
-                .map(|t| t.deref().to_vec())
-                .collect_vec(),
+            inputs,
             pretty_elements: None,
             outputs: model_results
                 .outputs
@@ -1319,13 +1505,11 @@ impl GraphCircuit {
             max_lookup_inputs: model_results.max_lookup_inputs,
             min_lookup_inputs: model_results.min_lookup_inputs,
             max_range_size: model_results.max_range_size,
+            lime_model,
+            local_surrogate,
         };
 
-        witness.generate_rescaled_elements(
-            self.model().graph.get_input_scales(),
-            self.model().graph.get_output_scales()?,
-            visibility,
-        );
+        witness.generate_rescaled_elements(input_scales, output_scales, visibility);
 
         #[cfg(not(target_arch = "wasm32"))]
         log::trace!(
@@ -1553,10 +1737,20 @@ impl Circuit<Fp> for GraphCircuit {
                 .unwrap()
         );
 
+        // TODO: make this real number
+        // TODO: make optional
+        let lime_chip = if let Some(n) = params.run_args.generate_explanation {
+            println!("N: {}, D: {}", n, params.d);
+            Lime2Chip::configure(cs, n, params.d, 10)
+        } else {
+            Lime2Chip::configure(cs, 0, params.d, 10)
+        };
+
         GraphConfig {
             model_config,
             module_configs,
             circuit_size,
+            lime_chip,
         }
     }
 
@@ -1647,6 +1841,7 @@ impl Circuit<Fp> for GraphCircuit {
                 &mut constants,
             )?;
         }
+        // TODO: layout the perturb module
 
         // now we need to assign the flattened params to the model
         let mut model = self.model().clone();
@@ -1695,6 +1890,19 @@ impl Circuit<Fp> for GraphCircuit {
             model.replace_consts(&split_params);
         }
 
+        println!("INPUTS SYNTH: {:?}", inputs);
+        let input = &inputs[0];
+        let local_surrogate = &self.graph_witness.local_surrogate.as_ref().unwrap();
+        let local_surrogate = Tensor::new(Some(local_surrogate), &[local_surrogate.len()]);
+        println!("LOCAL SURR SYNTH: {:?}", local_surrogate);
+        let perturbed_input = config
+            .lime_chip
+            .layout_perturb_uniform(&mut layouter, input.clone())
+            .unwrap();
+        println!("pert: {:?}", perturbed_input);
+        inputs[0] = perturbed_input;
+        println!("INPUTS NEW: {:?}", inputs);
+
         // create a new module for the model (space 2)
         layouter.assign_region(|| "_enter_module_2", |_| Ok(()))?;
         trace!("laying out model");
@@ -1711,11 +1919,13 @@ impl Circuit<Fp> for GraphCircuit {
                 &mut vars,
                 &outputs,
                 &mut constants,
+                &config.lime_chip,
             )
             .map_err(|e| {
                 log::error!("{}", e);
                 PlonkError::Synthesis
-            })?;
+            })
+            .unwrap();
         trace!("running output module layout");
 
         let output_visibility = &self.settings().run_args.output_visibility;

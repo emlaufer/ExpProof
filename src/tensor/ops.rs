@@ -1615,6 +1615,15 @@ pub mod nonlinearities {
             .unwrap()
     }
 
+    /// Elementwise checks if tensor is zero.
+    /// # Arguments
+    /// * `a` - Tensor
+    /// ```
+    pub fn is_zero(a: &Tensor<i64>) -> Tensor<i64> {
+        a.par_enum_map(|_, a_i| Ok::<_, TensorError>(if a_i == 0 { 1 } else { 0 }))
+            .unwrap()
+    }
+
     /// Elementwise applies square root to a tensor of integers.
     /// # Arguments
     ///
