@@ -155,19 +155,19 @@ impl Lime2Chip {
         println!("SAMPLES: {:?}", lime_samples);
         println!("perturbations: {:?}", perturbations);
 
-        //use crate::circuit::utils::F32;
-        //let ball_samples_normal = crate::circuit::ops::layouts::nonlinearity(
-        //    config,
-        //    region,
-        //    &[ball_samples],
-        //    &crate::circuit::ops::lookup::LookupOp::Norm {
-        //        scale: F32(2f32.powf(8.0)),
-        //        mean: F32(0f32),
-        //        std: F32(1f32),
-        //    },
-        //)
-        //.unwrap();
-        //println!("BALL SAMPLES!: {:?}", ball_samples_normal);
+        use crate::circuit::utils::F32;
+        let ball_samples_normal = crate::circuit::ops::layouts::nonlinearity(
+            config,
+            region,
+            &[ball_samples],
+            &crate::circuit::ops::lookup::LookupOp::Norm {
+                scale: F32(2f32.powf(8.0)),
+                mean: F32(0f32),
+                std: F32(1f32),
+            },
+        )
+        .unwrap();
+        println!("BALL SAMPLES!: {:?}", ball_samples_normal);
 
         // compute
         //let square_norms = einsum(
@@ -197,7 +197,9 @@ impl Lime2Chip {
         //)?;
 
         // TODO: rescale by distance to point....
-        let sphere_samples = ball_samples.get_slice(&[0..self.n_ball, 0..d]).unwrap();
+        let sphere_samples = ball_samples_normal
+            .get_slice(&[0..self.n_ball, 0..d])
+            .unwrap();
         let mut x_expanded = x.clone();
         x_expanded.expand(&[self.n_ball, d]).unwrap();
         let perturbations2 = pairwise(
