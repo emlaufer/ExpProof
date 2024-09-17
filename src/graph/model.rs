@@ -1199,7 +1199,7 @@ impl Model {
             std: F32(1f32),
         };
         base_gate
-            .configure_lookup(meta, input, output, index, (0, 255), logrows, &op)
+            .configure_lookup(meta, input, output, index, lookup_range, logrows, &op)
             .unwrap();
 
         for range in required_range_checks {

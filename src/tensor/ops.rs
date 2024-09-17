@@ -1389,6 +1389,9 @@ pub mod nonlinearities {
 
             println!("INPUT IS: {:?}", a_i);
             let kix = (a_i as f64) / scale_input;
+            if kix > 255.0 || kix < 0.0 {
+                return Ok::<_, TensorError>(0 as i64);
+            }
             println!("INPUT IS: {:?}", kix);
             let kix = scale_input * dist.inverse_cdf(kix + f64::EPSILON);
             let rounded = kix.round();
