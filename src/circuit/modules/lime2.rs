@@ -135,11 +135,11 @@ impl Lime2Chip {
         );
 
         let mut lime_samples = samples.get_slice(&[0..(self.n_lime * d)]).unwrap();
-        lime_samples.reshape(&[self.n_lime, d]);
+        lime_samples.reshape(&[self.n_lime, d]).unwrap();
         let mut ball_samples = samples
             .get_slice(&[(self.n_lime * d)..samples.dims()[0]])
             .unwrap();
-        ball_samples.reshape(&[self.n_ball, d + 2]);
+        ball_samples.reshape(&[self.n_ball, d + 2]).unwrap();
 
         // perturb x_border by lime samples...
         let mut x_border_expanded = x_border.clone();
@@ -149,7 +149,8 @@ impl Lime2Chip {
             region,
             &[x_border_expanded.clone(), lime_samples.clone()],
             BaseOp::Add,
-        )?;
+        )
+        .unwrap();
         println!("X_BORDER: {:?}", x_border);
         println!("SAMPLES: {:?}", lime_samples);
         println!("perturbations: {:?}", perturbations);
@@ -202,15 +203,18 @@ impl Lime2Chip {
         let perturbations2 = pairwise(
             config,
             region,
-            &[x_expanded.clone(), ball_samples.clone()],
+            &[x_expanded.clone(), sphere_samples.clone()],
             BaseOp::Add,
-        )?;
+        )
+        .unwrap();
 
         // concat all the points together...
         let result = x.concat(x_border.clone()).unwrap();
         let result = result.concat(perturbations).unwrap();
         let mut result = result.concat(perturbations2).unwrap();
-        result.reshape(&[(self.n_lime + self.n_ball), d]);
+        result
+            .reshape(&[(self.n_lime + self.n_ball + 2), d])
+            .unwrap();
         Ok(result)
         //unimplemented!();
     }
