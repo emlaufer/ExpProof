@@ -28,6 +28,7 @@ use colored_json::ToColoredJson;
 use gag::Gag;
 use halo2_proofs::plonk::VerifyingKey;
 use halo2_proofs::poly::commitment::CommitmentScheme;
+use halo2_proofs::{circuit::*, plonk::*, poly::Rotation};
 pub use input::DataSource;
 use itertools::Itertools;
 use rand::{thread_rng, Rng};
@@ -50,7 +51,7 @@ use crate::circuit::table::{num_cols_required, Range, Table, RESERVED_BLINDING_R
 use crate::circuit::{CheckMode, InputType};
 use crate::fieldutils::{felt_to_f64, i64_to_felt};
 use crate::pfsys::PrettyElements;
-use crate::tensor::{Tensor, ValTensor};
+use crate::tensor::{Tensor, ValTensor, ValType};
 use crate::{RunArgs, EZKL_BUF_CAPACITY};
 
 use halo2_proofs::{
@@ -1741,9 +1742,9 @@ impl Circuit<Fp> for GraphCircuit {
         // TODO: make optional
         let lime_chip = if let Some(n) = params.run_args.generate_explanation {
             println!("N: {}, D: {}", n, params.d);
-            Lime2Chip::configure(cs, n, params.d, 10)
+            Lime2Chip::configure(cs, n, 10, params.d)
         } else {
-            Lime2Chip::configure(cs, 0, params.d, 10)
+            Lime2Chip::configure(cs, 0, 10, params.d)
         };
 
         GraphConfig {
@@ -1893,14 +1894,18 @@ impl Circuit<Fp> for GraphCircuit {
         println!("INPUTS SYNTH: {:?}", inputs);
         let input = &inputs[0];
         let local_surrogate = &self.graph_witness.local_surrogate.as_ref().unwrap();
-        let local_surrogate = Tensor::new(Some(local_surrogate), &[local_surrogate.len()]);
-        println!("LOCAL SURR SYNTH: {:?}", local_surrogate);
-        let perturbed_input = config
-            .lime_chip
-            .layout_perturb_uniform(&mut layouter, input.clone())
-            .unwrap();
-        println!("pert: {:?}", perturbed_input);
-        inputs[0] = perturbed_input;
+        let local_surrogate = local_surrogate
+            .iter()
+            .map(|v| ValType::Value(Value::known(v.clone())))
+            .collect::<Vec<_>>();
+        //let local_surrogate = Tensor::new(Some(local_surrogate), &[local_surrogate.len()]).unwrap();
+        //println!("LOCAL SURR SYNTH: {:?}", local_surrogate);
+        //let perturbed_input = config
+        //    .lime_chip
+        //    .layout_perturb_uniform(&mut layouter, input.clone())
+        //    .unwrap();
+        //println!("pert: {:?}", perturbed_input);
+        //inputs[0] = perturbed_input;
         println!("INPUTS NEW: {:?}", inputs);
 
         // create a new module for the model (space 2)
@@ -1920,6 +1925,7 @@ impl Circuit<Fp> for GraphCircuit {
                 &outputs,
                 &mut constants,
                 &config.lime_chip,
+                &local_surrogate.into(),
             )
             .map_err(|e| {
                 log::error!("{}", e);

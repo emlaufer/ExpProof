@@ -1377,6 +1377,36 @@ pub mod nonlinearities {
         .unwrap()
     }
 
+    use statrs::distribution::{ContinuousCDF, Normal};
+    pub fn normal_inverse_cdf(
+        a: &Tensor<i64>,
+        scale_input: f64,
+        mean: f64,
+        std: f64,
+    ) -> Tensor<i64> {
+        a.enum_map(|_, a_i| {
+            let dist = Normal::new(mean, std).unwrap();
+
+            println!("INPUT IS: {:?}", a_i);
+            let kix = (a_i as f64) / scale_input;
+            println!("INPUT IS: {:?}", kix);
+            let kix = scale_input * dist.inverse_cdf(kix + f64::EPSILON);
+            let rounded = kix.round();
+            Ok::<_, TensorError>(rounded as i64)
+        })
+        .unwrap()
+    }
+
+    pub fn recip_sqrt(a: &Tensor<i64>, input_scale: f64, out_scale: f64) -> Tensor<i64> {
+        a.enum_map(|_, a_i| {
+            let rescaled = (a_i as f64) / input_scale;
+            let denom = (1_f64) / (rescaled.sqrt() + f64::EPSILON);
+            let d_inv_x = out_scale * denom;
+            Ok::<_, TensorError>(d_inv_x.round() as i64)
+        })
+        .unwrap()
+    }
+
     /// Raises to a floating point power.
     /// # Arguments
     /// * `a` - Tensor

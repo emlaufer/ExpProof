@@ -36,7 +36,8 @@ impl Lime2Chip {
         n_ball: usize,
         d: usize,
     ) -> Self {
-        let sample_chip = SampleChip::configure(meta, (n_lime + n_ball) * d);
+        println!("CONFIG: {} {} {}", n_lime, n_ball, d);
+        let sample_chip = SampleChip::configure(meta, (n_lime * d) + (n_ball * (d + 2)));
         let perturb_chip = PerturbChip::configure(meta, Some(256));
 
         Self {
@@ -97,23 +98,121 @@ impl Lime2Chip {
         unimplemented!();
     }
 
+    pub fn layout_samples(
+        &self,
+        layouter: &mut impl Layouter<Fp>,
+    ) -> Result<ValTensor<Fp>, ModuleError> {
+        let samples = self.sample_chip.layout(layouter)?;
+        let samples = samples
+            .iter()
+            .map(|v| ValType::PrevAssigned(v.clone()))
+            .collect::<Vec<ValType<_>>>();
+        Ok(samples.into())
+    }
+
     // layout all Lime operations...
     pub fn layout(
         &self,
-        layouter: &mut impl Layouter<Fp>,
+        //layouter: &mut impl Layouter<Fp>,
         config: &BaseConfig<Fp>,
         region: &mut RegionCtx<Fp>,
-        x: ValTensor<Fp>,
-        x_border: ValTensor<Fp>,
+        x: &ValTensor<Fp>,
+        x_border: &ValTensor<Fp>,
+        samples: &ValTensor<Fp>,
     ) -> Result<ValTensor<Fp>, ModuleError> {
         //self.generate_samples(layouter)?;
+        //
+        let d = x.dims()[0];
+        assert_eq!(x.dims(), &[d]);
+        assert_eq!(x_border.dims(), &[d]);
 
-        let lime_samples = self.layout_perturb_uniform(layouter, x_border)?;
+        //let lime_samples = self.layout_perturb_uniform(layouter, x_border)?;
+        println!("SAMPLE LEN: {:?}", samples.dims());
+        println!("N_LIME {} N_BALL {} d {}", self.n_lime, self.n_ball, d);
+        assert_eq!(
+            samples.dims(),
+            &[(self.n_lime * d) + (self.n_ball * (d + 2))]
+        );
 
-        // some checks that dims are ccorrect
-        assert!(false);
+        let mut lime_samples = samples.get_slice(&[0..(self.n_lime * d)]).unwrap();
+        lime_samples.reshape(&[self.n_lime, d]);
+        let mut ball_samples = samples
+            .get_slice(&[(self.n_lime * d)..samples.dims()[0]])
+            .unwrap();
+        ball_samples.reshape(&[self.n_ball, d + 2]);
 
-        unimplemented!();
+        // perturb x_border by lime samples...
+        let mut x_border_expanded = x_border.clone();
+        x_border_expanded.expand(&[self.n_lime, d]).unwrap();
+        let perturbations = pairwise(
+            config,
+            region,
+            &[x_border_expanded.clone(), lime_samples.clone()],
+            BaseOp::Add,
+        )?;
+        println!("X_BORDER: {:?}", x_border);
+        println!("SAMPLES: {:?}", lime_samples);
+        println!("perturbations: {:?}", perturbations);
+
+        use crate::circuit::utils::F32;
+        let ball_samples_normal = crate::circuit::ops::layouts::nonlinearity(
+            config,
+            region,
+            &[ball_samples],
+            &crate::circuit::ops::lookup::LookupOp::Norm {
+                scale: F32(2f32.powf(8.0)),
+                mean: F32(0f32),
+                std: F32(1f32),
+            },
+        )
+        .unwrap();
+        println!("BALL SAMPLES!: {:?}", ball_samples_normal);
+
+        // compute
+        let square_norms = einsum(
+            config,
+            region,
+            &[ball_samples_normal.clone(), ball_samples_normal.clone()],
+            "ij,ij->ik",
+        )?;
+        println!("square norms!: {:?}", square_norms);
+        // scale down to 8 bits...
+        let recip_norms = crate::circuit::ops::layouts::nonlinearity(
+            config,
+            region,
+            &[square_norms],
+            &crate::circuit::ops::lookup::LookupOp::Sqrt {
+                scale: F32(2f32.powf(16.0)),
+            },
+        )
+        .unwrap();
+        println!("norms!: {:?}", recip_norms);
+        // multiply by recips...
+        let normalized = einsum(
+            config,
+            region,
+            &[ball_samples_normal.clone(), recip_norms],
+            "ij,ik->ij",
+        )?;
+
+        // TODO: rescale by distance to point....
+        let sphere_samples = normalized.get_slice(&[0..self.n_ball, 0..d]).unwrap();
+        let mut x_expanded = x.clone();
+        x_expanded.expand(&[self.n_ball, d]).unwrap();
+        let perturbations2 = pairwise(
+            config,
+            region,
+            &[x_expanded.clone(), sphere_samples.clone()],
+            BaseOp::Add,
+        )?;
+
+        // concat all the points together...
+        let result = x.concat(x_border.clone()).unwrap();
+        let result = result.concat(perturbations).unwrap();
+        let mut result = result.concat(perturbations2).unwrap();
+        result.reshape(&[(self.n_lime + self.n_ball), d]);
+        Ok(result)
+        //unimplemented!();
     }
 
     pub fn layout_perturb_ball(

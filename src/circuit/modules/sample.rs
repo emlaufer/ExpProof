@@ -97,6 +97,7 @@ impl<const BITS: usize> SampleChip<BITS> {
     /// Configure
     pub fn configure(meta: &mut ConstraintSystem<Fp>, n: usize) -> Self {
         //  instantiate the required columns
+        println!("MAKING N SAMPLES: {:?}", n);
         let hash_inputs = (0..POSEIDON_WIDTH)
             .map(|_| meta.advice_column())
             .collect::<Vec<_>>();

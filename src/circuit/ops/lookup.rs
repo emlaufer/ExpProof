@@ -126,6 +126,16 @@ pub enum LookupOp {
     HardSwish {
         scale: utils::F32,
     },
+    // TODO:
+    Norm {
+        scale: utils::F32,
+        mean: utils::F32,
+        std: utils::F32,
+    },
+    RecipSqrt {
+        input_scale: utils::F32,
+        output_scale: utils::F32,
+    },
 }
 
 impl LookupOp {
@@ -227,6 +237,22 @@ impl LookupOp {
             LookupOp::HardSwish { scale } => {
                 Ok(tensor::ops::nonlinearities::hardswish(&x, scale.into()))
             }
+            LookupOp::Norm { scale, mean, std } => {
+                Ok(tensor::ops::nonlinearities::normal_inverse_cdf(
+                    &x,
+                    scale.into(),
+                    mean.into(),
+                    std.into(),
+                ))
+            }
+            LookupOp::RecipSqrt {
+                input_scale,
+                output_scale,
+            } => Ok(tensor::ops::nonlinearities::recip_sqrt(
+                &x,
+                input_scale.into(),
+                output_scale.into(),
+            )),
         }?;
 
         let output = res.map(|x| i64_to_felt(x));
@@ -289,6 +315,18 @@ impl<F: PrimeField + TensorType + PartialOrd + std::hash::Hash + IntoI64> Op<F> 
             LookupOp::Sinh { scale } => format!("SINH(scale={})", scale),
             LookupOp::ASinh { scale } => format!("ASINH(scale={})", scale),
             LookupOp::HardSwish { scale } => format!("HARDSWISH(scale={})", scale),
+            LookupOp::Norm { scale, std, mean } => {
+                format!("NORM(scale={}, mean={}, std={})", scale, mean, std)
+            }
+            LookupOp::RecipSqrt {
+                input_scale,
+                output_scale,
+            } => {
+                format!(
+                    "RecipSqrt(input_scale={}, output_scale={})",
+                    input_scale, output_scale
+                )
+            }
         }
     }
 

@@ -22,6 +22,7 @@ use crate::{
     tensor::{Tensor, ValTensor},
     RunArgs,
 };
+use halo2_proofs::{circuit::*, plonk::*, poly::Rotation};
 use halo2curves::bn256::Fr as Fp;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -564,6 +565,18 @@ impl Model {
             .collect::<Result<Vec<_>, GraphError>>()?;
 
         let res = self.dummy_layout(run_args, &inputs, false, false)?;
+        use crate::circuit::utils::F32;
+        let mut required_lookups: Vec<LookupOp> = res.lookup_ops.into_iter().collect();
+        required_lookups.push(crate::circuit::ops::lookup::LookupOp::Sqrt {
+            scale: F32(2f32.powf(16.0)),
+        });
+        // TODO: configure these in a global spot...in lime2chip maybe
+        // CANNOT DO HERE...range is too big for this op...
+        //required_lookups.push(crate::circuit::ops::lookup::LookupOp::Norm {
+        //    scale: F32(8f32),
+        //    mean: F32(0f32),
+        //    std: F32(1f32),
+        //});
 
         // if we're using percentage tolerance, we need to add the necessary range check ops for it.
         Ok(GraphSettings {
@@ -572,7 +585,7 @@ impl Model {
             module_sizes: crate::graph::modules::ModuleSizes::default(),
             num_rows: res.num_rows,
             total_assignments: res.linear_coord,
-            required_lookups: res.lookup_ops.into_iter().collect(),
+            required_lookups: required_lookups,
             required_range_checks: res.range_checks.into_iter().collect(),
             model_output_scales: self.graph.get_output_scales()?,
             model_input_scales: self.graph.get_input_scales(),
@@ -1179,6 +1192,16 @@ impl Model {
             base_gate.configure_lookup(meta, input, output, index, lookup_range, logrows, &op)?;
         }
 
+        use crate::circuit::utils::F32;
+        let op = crate::circuit::ops::lookup::LookupOp::Norm {
+            scale: F32(2f32.powf(8.0)),
+            mean: F32(0f32),
+            std: F32(1f32),
+        };
+        base_gate
+            .configure_lookup(meta, input, output, index, (0, 255), logrows, &op)
+            .unwrap();
+
         for range in required_range_checks {
             base_gate.configure_range_check(meta, input, index, range, logrows)?;
         }
@@ -1220,6 +1243,7 @@ impl Model {
         witnessed_outputs: &[ValTensor<Fp>],
         constants: &mut ConstantsMap<Fp>,
         lime_chip: &Lime2Chip,
+        local_surrogate: &ValTensor<Fp>,
         // TODO: make cleanner...
     ) -> Result<Vec<ValTensor<Fp>>, GraphError> {
         info!("model layout...");
@@ -1228,6 +1252,10 @@ impl Model {
 
         let mut results = BTreeMap::<usize, Vec<ValTensor<Fp>>>::new();
 
+        let samples = lime_chip.layout_samples(layouter).unwrap();
+
+        // TODO: modify input shapes when lime involved...that way
+        //  this should just work as intended...
         let input_shapes = self.graph.input_shapes()?;
         for (i, input_idx) in self.graph.inputs.iter().enumerate() {
             if self.visibility.input.is_public() {
@@ -1239,9 +1267,12 @@ impl Model {
                 results.insert(*input_idx, vec![instance]);
                 vars.increment_instance_idx();
             } else {
-                let mut input = inputs[i].clone();
-                input.reshape(&input_shapes[i])?;
-                results.insert(*input_idx, vec![input]);
+                // skip first input...
+                if i != 0 {
+                    let mut input = inputs[i].clone();
+                    input.reshape(&input_shapes[i])?;
+                    results.insert(*input_idx, vec![input]);
+                }
             }
         }
 
@@ -1263,6 +1294,17 @@ impl Model {
                 );
                 // we need to do this as this loop is called multiple times
                 vars.set_instance_idx(instance_idx);
+
+                let model_input = lime_chip
+                    .layout(
+                        &config.base,
+                        &mut thread_safe_region,
+                        &inputs[0],
+                        local_surrogate,
+                        &samples,
+                    )
+                    .unwrap();
+                results.insert(0, vec![model_input]);
 
                 let outputs = self
                     .layout_nodes(&mut config, &mut thread_safe_region, &mut results)
