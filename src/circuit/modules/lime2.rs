@@ -169,34 +169,36 @@ impl Lime2Chip {
         println!("BALL SAMPLES!: {:?}", ball_samples_normal);
 
         // compute
-        let square_norms = einsum(
-            config,
-            region,
-            &[ball_samples_normal.clone(), ball_samples_normal.clone()],
-            "ij,ij->ik",
-        )?;
-        println!("square norms!: {:?}", square_norms);
-        // scale down to 8 bits...
-        let recip_norms = crate::circuit::ops::layouts::nonlinearity(
-            config,
-            region,
-            &[square_norms],
-            &crate::circuit::ops::lookup::LookupOp::Sqrt {
-                scale: F32(2f32.powf(16.0)),
-            },
-        )
-        .unwrap();
-        println!("norms!: {:?}", recip_norms);
-        // multiply by recips...
-        let normalized = einsum(
-            config,
-            region,
-            &[ball_samples_normal.clone(), recip_norms],
-            "ij,ik->ij",
-        )?;
+        //let square_norms = einsum(
+        //    config,
+        //    region,
+        //    &[ball_samples_normal.clone(), ball_samples_normal.clone()],
+        //    "ij,ij->ik",
+        //)?;
+        //println!("square norms!: {:?}", square_norms);
+        //// scale down to 8 bits...
+        //let recip_norms = crate::circuit::ops::layouts::nonlinearity(
+        //    config,
+        //    region,
+        //    &[square_norms],
+        //    &crate::circuit::ops::lookup::LookupOp::Sqrt {
+        //        scale: F32(2f32.powf(16.0)),
+        //    },
+        //)
+        //.unwrap();
+        //println!("norms!: {:?}", recip_norms);
+        //// multiply by recips...
+        //let normalized = einsum(
+        //    config,
+        //    region,
+        //    &[ball_samples_normal.clone(), recip_norms],
+        //    "ij,ik->ij",
+        //)?;
 
         // TODO: rescale by distance to point....
-        let sphere_samples = normalized.get_slice(&[0..self.n_ball, 0..d]).unwrap();
+        let sphere_samples = ball_samples_normal
+            .get_slice(&[0..self.n_ball, 0..d])
+            .unwrap();
         let mut x_expanded = x.clone();
         x_expanded.expand(&[self.n_ball, d]).unwrap();
         let perturbations2 = pairwise(
