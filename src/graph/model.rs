@@ -567,6 +567,10 @@ impl Model {
         let res = self.dummy_layout(run_args, &inputs, false, false)?;
         use crate::circuit::utils::F32;
         let mut required_lookups: Vec<LookupOp> = res.lookup_ops.into_iter().collect();
+        required_lookups.push(crate::circuit::ops::lookup::LookupOp::RecipSqrt {
+            input_scale: F32(2f32.powf(16.0)),
+            output_scale: F32(2f32.powf(8.0)),
+        });
         //required_lookups.push(crate::circuit::ops::lookup::LookupOp::Sqrt {
         //    scale: F32(2f32.powf(16.0)),
         //});
