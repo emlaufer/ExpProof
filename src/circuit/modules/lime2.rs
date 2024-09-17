@@ -9,6 +9,7 @@ use crate::tensor::{Tensor, ValTensor, ValType};
 
 use crate::circuit::ops::layouts::*;
 use crate::circuit::{ops::base::BaseOp, utils};
+use crate::fieldutils::{felt_to_i64, i64_to_felt};
 
 use super::perturb::PerturbChip;
 use super::sample::SampleChip;
@@ -27,6 +28,7 @@ pub struct Lime2Chip {
 
     n_lime: usize,
     n_ball: usize,
+    d: usize,
 }
 
 impl Lime2Chip {
@@ -47,6 +49,7 @@ impl Lime2Chip {
             samples: None,
             n_lime,
             n_ball,
+            d,
         }
     }
 
@@ -59,43 +62,43 @@ impl Lime2Chip {
     }
 
     pub fn run(
-        input: Vec<Fp>,
+        x: Vec<Fp>,
         x_border: Vec<Fp>,
-        n: usize,
-        n_surrogate: usize,
+        n_lime: usize,
+        n_ball: usize,
         d: usize,
     ) -> Result<Vec<Fp>, ModuleError> {
-        let samples = SampleChip::<8>::run((n + n_surrogate) * d)?;
+        let samples = SampleChip::<8>::run((n_lime * d) + (n_ball * (d + 2)))?;
+
+        let lime_samples = &samples[0..n_lime * d];
+        let ball_samples = &samples[0..n_ball * (d + 2)];
+
+        let lime_inputs = lime_samples.iter().enumerate().map(|(i, v)| v + x[i % d]);
+
+        let ball_tensor = Tensor::new(Some(ball_samples), &[n_ball, d + 2]).unwrap();
+        let ball_tensor = ball_tensor.clone().map(|x| felt_to_i64(x));
+        let ball_samples_normal = crate::tensor::ops::nonlinearities::normal_inverse_cdf(
+            &ball_tensor,
+            2f64.powf(8.0),
+            0.0,
+            1.0,
+        );
+        println!("ball_samples_normal: {:?}", ball_samples_normal);
+        //let ball_norms =
+
         // Must pass through normal etc...
         // FIXME(EVAN)
-        let mut perturbations = PerturbChip::run(input, samples[0..n_surrogate * d].to_vec(), 256)?;
-        let mut perturbations2 =
-            PerturbChip::run(x_border, samples[n_surrogate * d..].to_vec(), 256)?;
-        perturbations.extend(perturbations2);
+        //perturbations.extend(perturbations2);
 
-        Ok(perturbations)
-    }
+        //Ok(perturbations)
+        let perturbations = vec![Fp::zero(); n_lime * d];
+        let perturbations2 = vec![Fp::zero(); n_ball * d];
 
-    pub fn generate_samples(
-        &mut self,
-        layouter: &mut impl Layouter<Fp>,
-    ) -> Result<(), ModuleError> {
-        self.samples = Some(self.sample_chip.layout(layouter)?);
-        Ok(())
-    }
-
-    pub fn distance(
-        &mut self,
-        config: &BaseConfig<Fp>,
-        region: &mut RegionCtx<Fp>,
-        a: ValTensor<Fp>,
-        b: ValTensor<Fp>,
-    ) -> Result<ValTensor<Fp>, ModuleError> {
-        let delta = pairwise(config, region, &[a.clone(), b.clone()], BaseOp::Sub)?;
-        let square = dot(config, region, &[delta.clone(), delta.clone()]);
-        println!("Got {:?}", square);
-
-        unimplemented!();
+        let mut res = x.clone();
+        res.extend(x_border);
+        res.extend(perturbations);
+        res.extend(perturbations2);
+        Ok(res)
     }
 
     pub fn layout_samples(
@@ -106,6 +109,15 @@ impl Lime2Chip {
         let samples = samples
             .iter()
             .map(|v| ValType::PrevAssigned(v.clone()))
+            .collect::<Vec<ValType<_>>>();
+        Ok(samples.into())
+    }
+
+    pub fn run_samples(&self) -> Result<ValTensor<Fp>, ModuleError> {
+        let samples = SampleChip::<8>::run((self.n_lime * self.d) + (self.n_ball * (self.d + 2)))?;
+        let samples = samples
+            .iter()
+            .map(|v| ValType::Value(Value::known(v.clone())))
             .collect::<Vec<ValType<_>>>();
         Ok(samples.into())
     }
@@ -170,36 +182,35 @@ impl Lime2Chip {
         println!("BALL SAMPLES!: {:?}", ball_samples_normal);
 
         // compute
-        //let square_norms = einsum(
-        //    config,
-        //    region,
-        //    &[ball_samples_normal.clone(), ball_samples_normal.clone()],
-        //    "ij,ij->ik",
-        //)?;
-        //println!("square norms!: {:?}", square_norms);
-        //// scale down to 8 bits...
-        //let recip_norms = crate::circuit::ops::layouts::nonlinearity(
-        //    config,
-        //    region,
-        //    &[square_norms],
-        //    &crate::circuit::ops::lookup::LookupOp::Sqrt {
-        //        scale: F32(2f32.powf(16.0)),
-        //    },
-        //)
-        //.unwrap();
-        //println!("norms!: {:?}", recip_norms);
-        //// multiply by recips...
-        //let normalized = einsum(
-        //    config,
-        //    region,
-        //    &[ball_samples_normal.clone(), recip_norms],
-        //    "ij,ik->ij",
-        //)?;
+        let square_norms = einsum(
+            config,
+            region,
+            &[ball_samples_normal.clone(), ball_samples_normal.clone()],
+            "ij,ij->ik",
+        )?;
+        println!("square norms!: {:?}", square_norms);
+        // scale down to 8 bits...
+        let recip_norms = crate::circuit::ops::layouts::nonlinearity(
+            config,
+            region,
+            &[square_norms],
+            &crate::circuit::ops::lookup::LookupOp::RecipSqrt {
+                input_scale: F32(2f32.powf(16.0)),
+                output_scale: F32(2f32.powf(8.0)),
+            },
+        )
+        .unwrap();
+        println!("norms!: {:?}", recip_norms);
+        // multiply by recips...
+        let normalized = einsum(
+            config,
+            region,
+            &[ball_samples_normal.clone(), recip_norms],
+            "ij,ik->ij",
+        )?;
 
         // TODO: rescale by distance to point....
-        let sphere_samples = ball_samples_normal
-            .get_slice(&[0..self.n_ball, 0..d])
-            .unwrap();
+        let sphere_samples = normalized.get_slice(&[0..self.n_ball, 0..d]).unwrap();
         let mut x_expanded = x.clone();
         x_expanded.expand(&[self.n_ball, d]).unwrap();
         let perturbations2 = pairwise(
