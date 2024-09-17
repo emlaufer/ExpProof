@@ -179,7 +179,7 @@ impl Lime2Chip {
             },
         )
         .unwrap();
-        println!("BALL SAMPLES!: {:?}", ball_samples_normal);
+        println!("BALL SAMPLES!: {:?}", ball_samples_normal.show());
 
         // compute
         let square_norms = einsum(
@@ -188,7 +188,7 @@ impl Lime2Chip {
             &[ball_samples_normal.clone(), ball_samples_normal.clone()],
             "ij,ij->ik",
         )?;
-        println!("square norms!: {:?}", square_norms);
+        println!("square norms!: {:?}", square_norms.show());
         // scale down to 8 bits...
         let recip_norms = crate::circuit::ops::layouts::nonlinearity(
             config,
@@ -200,7 +200,7 @@ impl Lime2Chip {
             },
         )
         .unwrap();
-        println!("norms!: {:?}", recip_norms);
+        println!("norms!: {:?}", recip_norms.show());
         // multiply by recips...
         let normalized = einsum(
             config,
