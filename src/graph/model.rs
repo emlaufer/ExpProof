@@ -567,9 +567,9 @@ impl Model {
         let res = self.dummy_layout(run_args, &inputs, false, false)?;
         use crate::circuit::utils::F32;
         let mut required_lookups: Vec<LookupOp> = res.lookup_ops.into_iter().collect();
-        required_lookups.push(crate::circuit::ops::lookup::LookupOp::Sqrt {
-            scale: F32(2f32.powf(16.0)),
-        });
+        //required_lookups.push(crate::circuit::ops::lookup::LookupOp::Sqrt {
+        //    scale: F32(2f32.powf(16.0)),
+        //});
         // TODO: configure these in a global spot...in lime2chip maybe
         // CANNOT DO HERE...range is too big for this op...
         //required_lookups.push(crate::circuit::ops::lookup::LookupOp::Norm {
@@ -1192,15 +1192,15 @@ impl Model {
             base_gate.configure_lookup(meta, input, output, index, lookup_range, logrows, &op)?;
         }
 
-        use crate::circuit::utils::F32;
-        let op = crate::circuit::ops::lookup::LookupOp::Norm {
-            scale: F32(2f32.powf(8.0)),
-            mean: F32(0f32),
-            std: F32(1f32),
-        };
-        base_gate
-            .configure_lookup(meta, input, output, index, (0, 255), logrows, &op)
-            .unwrap();
+        //use crate::circuit::utils::F32;
+        //let op = crate::circuit::ops::lookup::LookupOp::Norm {
+        //    scale: F32(2f32.powf(8.0)),
+        //    mean: F32(0f32),
+        //    std: F32(1f32),
+        //};
+        //base_gate
+        //    .configure_lookup(meta, input, output, index, (0, 255), logrows, &op)
+        //    .unwrap();
 
         for range in required_range_checks {
             base_gate.configure_range_check(meta, input, index, range, logrows)?;
