@@ -134,13 +134,12 @@ impl Lime2Chip {
     ) -> Result<ValTensor<Fp>, ModuleError> {
         //self.generate_samples(layouter)?;
         //
+        println!("SAMPLES: {}", samples.show());
         let d = x.dims()[0];
         assert_eq!(x.dims(), &[d]);
         assert_eq!(x_border.dims(), &[d]);
 
         //let lime_samples = self.layout_perturb_uniform(layouter, x_border)?;
-        println!("SAMPLE LEN: {:?}", samples.dims());
-        println!("N_LIME {} N_BALL {} d {}", self.n_lime, self.n_ball, d);
         assert_eq!(
             samples.dims(),
             &[(self.n_lime * d) + (self.n_ball * (d + 2))]
@@ -163,9 +162,7 @@ impl Lime2Chip {
             BaseOp::Add,
         )
         .unwrap();
-        println!("X_BORDER: {:?}", x_border);
-        println!("SAMPLES: {:?}", lime_samples);
-        println!("perturbations: {:?}", perturbations);
+        println!("PERTURBATIONS BORDER: {}", samples.show());
 
         use crate::circuit::utils::F32;
         let ball_samples_normal = crate::circuit::ops::layouts::nonlinearity(
