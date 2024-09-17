@@ -1192,15 +1192,15 @@ impl Model {
             base_gate.configure_lookup(meta, input, output, index, lookup_range, logrows, &op)?;
         }
 
-        //use crate::circuit::utils::F32;
-        //let op = crate::circuit::ops::lookup::LookupOp::Norm {
-        //    scale: F32(2f32.powf(8.0)),
-        //    mean: F32(0f32),
-        //    std: F32(1f32),
-        //};
-        //base_gate
-        //    .configure_lookup(meta, input, output, index, (0, 255), logrows, &op)
-        //    .unwrap();
+        use crate::circuit::utils::F32;
+        let op = crate::circuit::ops::lookup::LookupOp::Norm {
+            scale: F32(2f32.powf(8.0)),
+            mean: F32(0f32),
+            std: F32(1f32),
+        };
+        base_gate
+            .configure_lookup(meta, input, output, index, (0, 255), logrows, &op)
+            .unwrap();
 
         for range in required_range_checks {
             base_gate.configure_range_check(meta, input, index, range, logrows)?;
