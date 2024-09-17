@@ -1389,7 +1389,7 @@ pub mod nonlinearities {
 
             println!("INPUT IS: {:?}", a_i);
             let kix = (a_i as f64) / scale_input;
-            if kix > 1.0 || kix < 0.0 {
+            if kix >= 1.0 || kix < 0.0 {
                 return Ok::<_, TensorError>(0 as i64);
             }
             println!("INPUT IS: {:?}", kix);
