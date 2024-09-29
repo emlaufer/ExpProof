@@ -108,9 +108,10 @@ impl<'a, F: PrimeField + TensorType + PartialOrd + std::hash::Hash> RegionCtx<'a
     ///
     pub fn debug_report(&self) {
         log::debug!(
-            "(rows={}, coord={}, constants={}, max_lookup_inputs={}, min_lookup_inputs={}, max_range_size={}, dynamic_lookup_col_coord={}, shuffle_col_coord={})",
+            "(rows={}, coord={}, cols={}, constants={}, max_lookup_inputs={}, min_lookup_inputs={}, max_range_size={}, dynamic_lookup_col_coord={}, shuffle_col_coord={})",
             self.row().to_string().blue(),
             self.linear_coord().to_string().yellow(),
+            self.num_inner_cols.to_string().yellow(),
             self.total_constants().to_string().red(),
             self.max_lookup_inputs().to_string().green(),
             self.min_lookup_inputs().to_string().green(),

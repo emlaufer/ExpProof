@@ -1583,6 +1583,7 @@ pub(crate) fn mock(
 
     info!("Mock proof");
 
+    println!("GOT instance: {:?}", public_inputs);
     let prover = halo2_proofs::dev::MockProver::run(
         circuit.settings().run_args.logrows,
         &circuit,

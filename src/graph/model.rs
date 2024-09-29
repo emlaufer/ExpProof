@@ -565,12 +565,25 @@ impl Model {
             .collect::<Result<Vec<_>, GraphError>>()?;
 
         let res = self.dummy_layout(run_args, &inputs, false, false)?;
+        let d = self.graph.input_shapes()?[0][1];
+
         use crate::circuit::utils::F32;
         let mut required_lookups: Vec<LookupOp> = res.lookup_ops.into_iter().collect();
         required_lookups.push(crate::circuit::ops::lookup::LookupOp::RecipSqrt {
-            input_scale: F32(2f32.powf(16.0)),
+            input_scale: F32(2f32.powf(8.0)),
             output_scale: F32(2f32.powf(8.0)),
         });
+        required_lookups.push(crate::circuit::ops::lookup::LookupOp::LimeWeight {
+            input_scale: F32(2f32.powf(8.0)),
+            sigma: Lime2Chip::kernel_width(d).into(),
+        });
+        required_lookups.push(crate::circuit::ops::lookup::LookupOp::Sqrt {
+            scale: F32(2f32.powf(8.0)),
+        });
+        required_lookups.push(crate::circuit::ops::lookup::LookupOp::Div {
+            denom: F32(2f32.powf(8.0)),
+        });
+        required_lookups.push(crate::circuit::ops::lookup::LookupOp::Abs);
         //required_lookups.push(crate::circuit::ops::lookup::LookupOp::Sqrt {
         //    scale: F32(2f32.powf(16.0)),
         //});
@@ -581,6 +594,13 @@ impl Model {
         //    mean: F32(0f32),
         //    std: F32(1f32),
         //});
+        // range check for dividing off 2^8 precision later...
+        let mut required_range_checks: Vec<Range> = res.range_checks.into_iter().collect();
+        required_range_checks.push((-128, 128));
+        let dual_gap_tolerance = (0.1 * 2f64.powf(8.0)) as i64;
+        required_range_checks.push((-dual_gap_tolerance, dual_gap_tolerance));
+        let dual_feasible_tolerance = ((0.01 * 1.5) * 2f64.powf(16.0)).ceil() as i64;
+        required_range_checks.push((-dual_feasible_tolerance, dual_feasible_tolerance));
 
         // if we're using percentage tolerance, we need to add the necessary range check ops for it.
         Ok(GraphSettings {
@@ -590,7 +610,7 @@ impl Model {
             num_rows: res.num_rows,
             total_assignments: res.linear_coord,
             required_lookups: required_lookups,
-            required_range_checks: res.range_checks.into_iter().collect(),
+            required_range_checks: required_range_checks,
             model_output_scales: self.graph.get_output_scales()?,
             model_input_scales: self.graph.get_input_scales(),
             num_dynamic_lookups: res.num_dynamic_lookups,
@@ -668,6 +688,10 @@ impl Model {
                         Some(x) => x,
                         None => 0,
                     };
+                    let surrogate_samples = match run_args.surrogate_samples {
+                        Some(x) => x,
+                        None => 0,
+                    };
 
                     if explanation_inferrences != 0 && *batch_size != 1 {
                         return Err(GraphError::InvalidRunArgs(
@@ -677,7 +701,8 @@ impl Model {
 
                     // TODO: replace constants
                     // FIXME(EVAN)
-                    let input_dim = (*batch_size + explanation_inferrences + 10 + 1) as i64;
+                    let input_dim =
+                        (Lime2Chip::input_size(explanation_inferrences, surrogate_samples)) as i64;
 
                     fact.shape
                         .set_dim(i, tract_onnx::prelude::TDim::Val(input_dim));
@@ -700,6 +725,10 @@ impl Model {
                     Some(x) => x,
                     None => 0,
                 };
+                let surrogate_samples = match run_args.surrogate_samples {
+                    Some(x) => x,
+                    None => 0,
+                };
 
                 if explanation_inferrences != 0 && *value != 1 {
                     return Err(GraphError::InvalidRunArgs(
@@ -709,7 +738,7 @@ impl Model {
 
                 // TODO: replace constants
                 // FIXME(EVAN)
-                let input_dim = *value + explanation_inferrences + 10 + 1;
+                let input_dim = Lime2Chip::input_size(explanation_inferrences, surrogate_samples);
                 input_dim
             } else {
                 *value
@@ -1207,6 +1236,7 @@ impl Model {
             .unwrap();
 
         for range in required_range_checks {
+            println!("configureing range: {:?}", range);
             base_gate.configure_range_check(meta, input, index, range, logrows)?;
         }
 
@@ -1247,7 +1277,12 @@ impl Model {
         witnessed_outputs: &[ValTensor<Fp>],
         constants: &mut ConstantsMap<Fp>,
         lime_chip: &Lime2Chip,
-        local_surrogate: &ValTensor<Fp>,
+        local_surrogate: &Option<ValTensor<Fp>>,
+        lime_model: &ValTensor<Fp>,
+        lime_intercept: &ValTensor<Fp>,
+        dual_model: &ValTensor<Fp>,
+        lime_model_topk: &ValTensor<Fp>,
+        lime_model_topk_idxs: &ValTensor<Fp>,
         // TODO: make cleanner...
     ) -> Result<Vec<ValTensor<Fp>>, GraphError> {
         info!("model layout...");
@@ -1308,7 +1343,7 @@ impl Model {
                         &samples,
                     )
                     .unwrap();
-                results.insert(0, vec![model_input]);
+                results.insert(0, vec![model_input.clone()]);
 
                 let outputs = self
                     .layout_nodes(&mut config, &mut thread_safe_region, &mut results)
@@ -1316,6 +1351,43 @@ impl Model {
                         error!("{}", e);
                         halo2_proofs::plonk::Error::Synthesis
                     })?;
+
+                if (crate::USE_SURROGATE) {
+                    lime_chip.layout_ball_checks(
+                        &config.base,
+                        &mut thread_safe_region,
+                        &outputs[0],
+                    );
+                    lime_chip.layout_lime_checks(
+                        &config.base,
+                        &mut thread_safe_region,
+                        &local_surrogate.clone().unwrap(),
+                        &model_input,
+                        &outputs[0],
+                        lime_model,
+                        lime_intercept,
+                        dual_model,
+                    );
+                } else {
+                    lime_chip.layout_lime_checks(
+                        &config.base,
+                        &mut thread_safe_region,
+                        &inputs[0],
+                        &model_input,
+                        &outputs[0],
+                        lime_model,
+                        lime_intercept,
+                        dual_model,
+                    );
+                }
+                lime_chip.layout_top_k_checks(
+                    &config.base,
+                    &mut thread_safe_region,
+                    lime_model,
+                    lime_model_topk,
+                    lime_model_topk_idxs,
+                    run_args.top_k.unwrap(),
+                );
 
                 if run_args.output_visibility.is_public() || run_args.output_visibility.is_fixed() {
                     let output_scales = self.graph.get_output_scales().map_err(|e| {

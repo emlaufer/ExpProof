@@ -194,6 +194,11 @@ struct PyRunArgs {
     #[pyo3(get, set)]
     /// Option<usize>: whether to gen explanation, with n samples
     pub generate_explanation: Option<usize>,
+    #[pyo3(get, set)]
+    /// Option<usize>: whether to gen explanation, with n samples
+    pub surrogate_samples: Option<usize>,
+    #[pyo3(get, set)]
+    pub top_k: Option<usize>,
 }
 
 /// default instantiation of PyRunArgs
@@ -225,6 +230,9 @@ impl From<PyRunArgs> for RunArgs {
             check_mode: py_run_args.check_mode,
             commitment: Some(py_run_args.commitment.into()),
             generate_explanation: py_run_args.generate_explanation,
+            surrogate_samples: py_run_args.surrogate_samples,
+            fixed_test: false,
+            top_k: py_run_args.top_k,
         }
     }
 }
@@ -248,6 +256,8 @@ impl Into<PyRunArgs> for RunArgs {
             check_mode: self.check_mode,
             commitment: self.commitment.into(),
             generate_explanation: self.generate_explanation,
+            surrogate_samples: self.surrogate_samples,
+            top_k: self.top_k,
         }
     }
 }

@@ -1,6 +1,8 @@
 use super::utilities::{dequantize, quantize_float};
-use crate::fieldutils::i64_to_felt;
+use crate::circuit::modules::lime2::Lime2Chip;
+use crate::fieldutils::{felt_to_i64, i64_to_felt};
 use crate::graph::errors::GraphError;
+use crate::tensor::ops::*;
 use crate::tensor::{
     ops::accumulated::{dot, prod},
     ops::add,
@@ -33,9 +35,10 @@ pub struct LassoModel<F: TensorType> {
     pub coeffs: Tensor<F>,
     // TODO: do we give this publicly?
     pub intercept: F,
+    pub dual: Tensor<F>,
 }
 
-impl<F: TensorType + PrimeField + PartialOrd> LassoModel<F> {
+impl<F: TensorType + PrimeField + PartialOrd + IntoI64> LassoModel<F> {
     //pub fn new(
     //    inputs: &Tensor<F>,
     //    outputs: &Tensor<F>,
@@ -132,7 +135,7 @@ impl<F: TensorType + PrimeField + PartialOrd> LassoModel<F> {
     //    };
     //}
 
-    pub fn compute_surrogate_model<G, H>(
+    pub fn find_local_surrogate<G, H>(
         classify: G,
         perturb: H,
         x: &Tensor<F>,
@@ -140,11 +143,15 @@ impl<F: TensorType + PrimeField + PartialOrd> LassoModel<F> {
         output_scale: Scale,
         n_surrogate_samples: usize,
         n_lasso_samples: usize,
-    ) -> LassoModel<F>
+    ) -> Option<Tensor<F>>
     where
         G: Fn(Tensor<F>) -> Result<Tensor<F>, GraphError>,
         H: Fn(Tensor<F>) -> Tensor<F>,
     {
+        if (!crate::USE_SURROGATE) {
+            return None;
+        }
+
         let classify_wrapper = |x: Tensor<f64>| {
             // quantize x
             let x = x.quantize(input_scale).unwrap();
@@ -164,63 +171,182 @@ impl<F: TensorType + PrimeField + PartialOrd> LassoModel<F> {
         println!("GOT TARGET CLASS: {:?}", target_class);
 
         let local_surrogate = Self::find_closest_enemy(classify_wrapper, &x_dequant, target_class);
+        println!("LOCAL SURROGATE float: {:?}", local_surrogate);
         let local_surrogate = local_surrogate.quantize(input_scale).unwrap();
-        println!("LOCAL SURROGATE: {:?}", local_surrogate);
+        println!("LOCAL SURROGATE: {}", local_surrogate.show());
+
+        println!(
+            "LOCAL SURROGATE INT: {:?}",
+            local_surrogate
+                .iter()
+                .map(|v| felt_to_i64(*v))
+                .collect::<Vec<_>>()
+        );
         println!("x: {:?}", x);
 
-        // perturb the enemy
-        let samples = perturb(local_surrogate.clone());
-        let labels = classify(samples.clone()).unwrap();
-
-        let (coeffs, intercept) =
-            Self::lasso(&samples, &labels, input_scale, output_scale, input_scale);
-
-        LassoModel {
-            lasso_samples: samples,
-            // TODO: fix
-            surrogate_samples: Tensor::new(None, &[1]).unwrap(),
-            local_surrogate,
-            coeffs,
-            intercept,
-        }
+        return Some(local_surrogate);
     }
 
-    fn lasso(
+    fn compute_weights(x_border: &Tensor<F>, inputs: &Tensor<F>) -> Tensor<F> {
+        let d = x_border.dims()[1];
+        let n = inputs.dims()[0];
+
+        let test = inputs.clone();
+        let x_border = x_border
+            .enum_map::<_, _, TensorError>(|i, v| Ok(felt_to_i64(v)))
+            .unwrap();
+        let inputs = inputs
+            .enum_map::<_, _, TensorError>(|i, v| Ok(felt_to_i64(v)))
+            .unwrap();
+
+        let mut x_expanded = x_border.clone();
+        x_expanded.reshape(&[1, d]);
+        x_expanded.expand(&[n, d]).unwrap();
+        let deltas = (x_expanded.clone() - inputs.clone()).unwrap();
+        // TODO: is this right??? do I need einsum?
+        //
+        let mut square_distance = vec![];
+        for i in 0..n {
+            let mut res = 0i64;
+            for j in 0..d {
+                let val = deltas.get(&[i, j]);
+                res += val * val;
+            }
+            square_distance.push(res);
+        }
+        let square_distance = Tensor::new(Some(&square_distance), &[n]).unwrap();
+        let square_distance = square_distance
+            .enum_map::<_, _, Error>(|i, v| Ok(v / 2i64.pow(8)))
+            .unwrap();
+        println!("SQUARE DIST: {:?}", square_distance);
+        //println!("SQUARE DIST SCALED: {:?}", square_distance);
+
+        let weights = crate::tensor::ops::nonlinearities::lime_weight(
+            &square_distance,
+            2f64.powf(8.0).into(),
+            Lime2Chip::kernel_width(d).into(),
+        );
+
+        let sqrt_weights =
+            crate::tensor::ops::nonlinearities::sqrt(&weights, 2f64.powf(8.0).into());
+
+        sqrt_weights
+            .enum_map::<_, _, Error>(|i, v| Ok(i64_to_felt(v)))
+            .unwrap()
+    }
+
+    pub fn lasso(
+        x: &Tensor<F>,
         inputs: &Tensor<F>,
         outputs: &Tensor<F>,
         input_scale: Scale,
         output_scale: Scale,
         model_scale: Scale,
-    ) -> (Tensor<F>, F) {
-        let inputs_float = inputs.dequantize(input_scale);
-        let outputs_float = outputs.dequantize(output_scale);
+        k: usize,
+    ) -> (Tensor<F>, Tensor<F>, Tensor<F>, F, Tensor<F>) {
+        let sqrt_weights = Self::compute_weights(x, inputs);
+        println!("weights: {:?}", sqrt_weights);
+
+        let inputs = mult(&[inputs.clone(), sqrt_weights.clone()]).unwrap();
+        let outputs = mult(&[outputs.clone(), sqrt_weights.clone()]).unwrap();
+
+        let inputs_float = inputs.dequantize(input_scale + 8);
+        let outputs_float = outputs.dequantize(output_scale + 8);
+        println!("INPUTS ARE: {:?}", inputs_float);
+        println!("OUTPUTS ARE: {:?}", outputs_float);
+
         let input_shape = inputs.dims();
         let output_shape = outputs.dims();
 
         // TODO: compute the kernel here... and use modified lime algorithm
+        println!("Inputs: {:?}", inputs_float.to_vec());
+        println!("outputs: {:?}", outputs_float.to_vec());
         let inputs_linfa =
             Array::from_shape_vec((input_shape[0], input_shape[1]), inputs_float.to_vec()).unwrap();
         let outputs_linfa = Array::from_shape_vec(output_shape[0], outputs_float.to_vec()).unwrap();
 
-        let data = Dataset::new(inputs_linfa, outputs_linfa);
+        let data = Dataset::new(inputs_linfa.clone(), outputs_linfa.clone());
         // train pure LASSO model with 0.3 penalty
         // TODO: customize params
         // TODO: ensure penalty is quantizable...
+        // TODO(EVAN): what should the penalty be?
         let model = ElasticNet::params()
-            .penalty(0.3)
+            .penalty(0.01)
             .l1_ratio(1.0)
             .fit(&data)
             .unwrap();
 
+        println!("LASSO model: {:?}", model);
+
+        let dual: Array<f64, _> =
+            (outputs_linfa - model.intercept() - inputs_linfa.dot(model.hyperplane()))
+                / (inputs.dims()[0] as f64);
+
         let hyperplane = model.hyperplane().to_vec();
+        let dual: Vec<f64> = dual.to_vec();
+        println!("hyperplane: {:?}", hyperplane);
+        println!("intercept: {:?}", model.intercept());
+        println!("dual: {:?}", dual);
+
+        // TODO(EVAN): could there be issues with rounding? No right?
+        let mut top_k = hyperplane.clone();
+        top_k.sort_by(|a, b| abs(*a).partial_cmp(&abs(*b)).unwrap());
+        let top_k = top_k[hyperplane.len() - k..].to_vec();
+        let mut top_k_idx = (0..hyperplane.len()).collect::<Vec<_>>();
+        top_k_idx.sort_by(|a, b| {
+            abs(hyperplane[*a])
+                .partial_cmp(&abs(hyperplane[*b]))
+                .unwrap()
+        });
+        let top_k_idx = top_k_idx[hyperplane.len() - k..].to_vec();
+        println!("top_k: {:?}", top_k);
+        println!("top_k_idx: {:?}", top_k_idx);
         let coeffs = Tensor::new(Some(&hyperplane), &[hyperplane.len()])
             .unwrap()
             .quantize(model_scale)
             .unwrap();
+        let top_k = Tensor::new(Some(&top_k), &[top_k.len()])
+            .unwrap()
+            .quantize(model_scale)
+            .unwrap();
+        println!("COEFFS: {:?}", coeffs.show());
+        println!("topk: {:?}", top_k.show());
+        let top_k_idx = Tensor::new(Some(&top_k_idx), &[top_k_idx.len()])
+            .unwrap()
+            .enum_map::<_, _, Error>(|i, v| Ok(i64_to_felt(v as i64)))
+            .unwrap();
         let intercept =
             i64_to_felt::<F>(quantize_float(&model.intercept(), 0.0, model_scale).unwrap());
+        let dual = Tensor::new(Some(&dual), &[dual.len()])
+            .unwrap()
+            .quantize(16)
+            .unwrap();
+        //.quantize(model_scale)
+        //.unwrap();
 
-        (coeffs, intercept)
+        println!(
+            "Inputs int: {:?}",
+            inputs.iter().map(|v| felt_to_i64(*v)).collect::<Vec<_>>()
+        );
+        println!(
+            "Outputs int: {:?}",
+            outputs.iter().map(|v| felt_to_i64(*v)).collect::<Vec<_>>()
+        );
+        println!(
+            "hyperplane int: {:?}",
+            coeffs.iter().map(|v| felt_to_i64(*v)).collect::<Vec<_>>()
+        );
+        println!("intercept int: {:?}", felt_to_i64(intercept));
+        println!(
+            "dual int: {:?}",
+            dual.iter().map(|v| felt_to_i64(*v)).collect::<Vec<_>>()
+        );
+        println!(
+            "topk int: {:?}",
+            top_k.iter().map(|v| felt_to_i64(*v)).collect::<Vec<_>>()
+        );
+
+        (coeffs, top_k, top_k_idx, intercept, dual)
     }
 
     pub fn find_closest_enemy<G>(classify: G, x: &Tensor<f64>, target_class: f64) -> Tensor<f64>
@@ -229,7 +355,7 @@ impl<F: TensorType + PrimeField + PartialOrd> LassoModel<F> {
     {
         // TODO: set these reasonably...
         let MU = 5.0;
-        let N = 100;
+        let N = 1000;
 
         let mut n_enemies = 1000;
         let mut closest_enemy = None;

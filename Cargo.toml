@@ -210,7 +210,8 @@ metal = ["dep:metal", "dep:objc"]
 
 # icicle patch to 0.1.0 if feature icicle is enabled
 [patch.'https://github.com/ingonyama-zk/icicle']
-icicle = { git = "https://github.com/ingonyama-zk/icicle?rev=45b00fb", package = "icicle", branch = "fix/vhnat/ezkl-build-fix" }
+#icicle = { git = "https://github.com/ingonyama-zk/icicle?rev=45b00fb", package = "icicle", branch = "fix/vhnat/ezkl-build-fix" }
+icicle = { path = "../icicle" }
 
 #[patch.'https://github.com/zkonduit/halo2']
 #halo2_proofs = { git = "https://github.com/emlaufer/halo2", branch = "ac/optional-selector-poly" }

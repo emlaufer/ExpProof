@@ -542,6 +542,7 @@ pub fn create_proof_circuit<
 >(
     circuit: C,
     instances: Vec<Vec<Scheme::Scalar>>,
+
     params: &'params Scheme::ParamsProver,
     pk: &ProvingKey<Scheme::Curve>,
     check_mode: CheckMode,
@@ -557,7 +558,8 @@ where
         + SerdeObject
         + PrimeField
         + FromUniformBytes<64>
-        + WithSmallOrderMulGroup<3>,
+        + WithSmallOrderMulGroup<3>
+        + Ord,
     Scheme::Curve: Serialize + DeserializeOwned,
 {
     let strategy = Strategy::new(params.verifier_params());
@@ -582,6 +584,11 @@ where
     // not wasm32 unknown
     let now = Instant::now();
 
+    println!("GOT instance: {:?}", instances);
+    let prover = halo2_proofs::dev::MockProver::run(19, &circuit, instances.clone()).unwrap();
+    prover.assert_satisfied();
+
+    println!("PROVING NOW>>>>>>>");
     create_proof::<Scheme, P, _, _, TW, _>(
         params,
         pk,
@@ -589,7 +596,8 @@ where
         pi_inner,
         &mut rng,
         &mut transcript,
-    )?;
+    )
+    .unwrap();
     let proof = transcript.finalize();
     let hex_proof = format!("0x{}", hex::encode(&proof));
 

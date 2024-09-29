@@ -29,6 +29,9 @@
 //! A library for turning computational graphs, such as neural networks, into ZK-circuits.
 //!
 
+// (EVAN): use surrogates or not!
+pub const USE_SURROGATE: bool = false;
+
 /// Error type
 #[derive(thiserror::Error, Debug)]
 #[allow(missing_docs)]
@@ -283,6 +286,14 @@ pub struct RunArgs {
     // TODO: add more settings here
     #[arg(long)]
     pub generate_explanation: Option<usize>,
+    #[arg(long)]
+    pub surrogate_samples: Option<usize>,
+
+    #[arg(long, default_value = "false")]
+    pub fixed_test: bool,
+
+    #[arg(long)]
+    pub top_k: Option<usize>,
 }
 
 impl Default for RunArgs {
@@ -304,6 +315,9 @@ impl Default for RunArgs {
             check_mode: CheckMode::UNSAFE,
             commitment: None,
             generate_explanation: None,
+            surrogate_samples: None,
+            fixed_test: false,
+            top_k: None,
         }
     }
 }

@@ -136,6 +136,11 @@ pub enum LookupOp {
         input_scale: utils::F32,
         output_scale: utils::F32,
     },
+    // Exponential kernel for lime weights...
+    LimeWeight {
+        input_scale: utils::F32,
+        sigma: utils::F32,
+    },
 }
 
 impl LookupOp {
@@ -253,6 +258,9 @@ impl LookupOp {
                 input_scale.into(),
                 output_scale.into(),
             )),
+            LookupOp::LimeWeight { input_scale, sigma } => Ok(
+                tensor::ops::nonlinearities::lime_weight(&x, input_scale.into(), sigma.into()),
+            ),
         }?;
 
         let output = res.map(|x| i64_to_felt(x));
@@ -326,6 +334,9 @@ impl<F: PrimeField + TensorType + PartialOrd + std::hash::Hash + IntoI64> Op<F> 
                     "RecipSqrt(input_scale={}, output_scale={})",
                     input_scale, output_scale
                 )
+            }
+            LookupOp::LimeWeight { input_scale, sigma } => {
+                format!("NORM(input_scale={}, sigma={})", input_scale, sigma)
             }
         }
     }

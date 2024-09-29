@@ -80,6 +80,7 @@ pub(crate) fn div<F: PrimeField + TensorType + PartialOrd + std::hash::Hash + In
     let input_dims = input.dims();
 
     let range_check_bracket = felt_to_i64(div) / 2;
+    println!("RANGE BRACKETS: {}", range_check_bracket);
 
     let divisor = create_constant_tensor(div, 1);
 
@@ -119,6 +120,10 @@ pub(crate) fn div<F: PrimeField + TensorType + PartialOrd + std::hash::Hash + In
         &[product.clone(), input.clone()],
         BaseOp::Sub,
     )?;
+    println!(
+        "diff_wit_input: {:?}",
+        diff_with_input.get_int_evals().unwrap()
+    );
 
     range_check(
         config,
@@ -748,7 +753,7 @@ pub fn einsum<F: PrimeField + TensorType + PartialOrd + std::hash::Hash + IntoI6
     Ok(output)
 }
 
-fn _sort_ascending<F: PrimeField + TensorType + PartialOrd + std::hash::Hash + IntoI64>(
+pub fn _sort_ascending<F: PrimeField + TensorType + PartialOrd + std::hash::Hash + IntoI64>(
     config: &BaseConfig<F>,
     region: &mut RegionCtx<F>,
     values: &[ValTensor<F>; 1],
@@ -850,7 +855,7 @@ pub fn topk_axes<F: PrimeField + TensorType + PartialOrd + std::hash::Hash + Int
     Ok(output)
 }
 
-fn select<F: PrimeField + TensorType + PartialOrd + std::hash::Hash + IntoI64>(
+pub fn select<F: PrimeField + TensorType + PartialOrd + std::hash::Hash + IntoI64>(
     config: &BaseConfig<F>,
     region: &mut RegionCtx<F>,
     values: &[ValTensor<F>; 2],
