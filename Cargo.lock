@@ -5292,8 +5292,7 @@ checksum = "81cdd64d312baedb58e21336b31bc043b77e01cc99033ce76ef539f78e965ebc"
 [[package]]
 name = "svm-rs"
 version = "0.5.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f7c7a55b859b986daa02c731cd07758d84b1db852665e45c5cfa6698c41d17cb"
+source = "git+https://github.com/emlaufer/svm-rs.git?branch=correct_version#dd5bc5307fc272c34b17a30f316c1cb81a4ee493"
 dependencies = [
  "const-hex",
  "dirs",
@@ -5312,8 +5311,7 @@ dependencies = [
 [[package]]
 name = "svm-rs-builds"
 version = "0.5.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f1bb4806c96207e7cde40fc238f9a1d570f3090f850a742e1e96665440615a31"
+source = "git+https://github.com/emlaufer/svm-rs.git?branch=correct_version#dd5bc5307fc272c34b17a30f316c1cb81a4ee493"
 dependencies = [
  "build_const",
  "const-hex",
