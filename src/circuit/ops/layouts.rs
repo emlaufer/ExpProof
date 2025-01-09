@@ -80,7 +80,6 @@ pub(crate) fn div<F: PrimeField + TensorType + PartialOrd + std::hash::Hash + In
     let input_dims = input.dims();
 
     let range_check_bracket = felt_to_i64(div) / 2;
-    println!("RANGE BRACKETS: {}", range_check_bracket);
 
     let divisor = create_constant_tensor(div, 1);
 
@@ -120,10 +119,6 @@ pub(crate) fn div<F: PrimeField + TensorType + PartialOrd + std::hash::Hash + In
         &[product.clone(), input.clone()],
         BaseOp::Sub,
     )?;
-    println!(
-        "diff_wit_input: {:?}",
-        diff_with_input.get_int_evals().unwrap()
-    );
 
     range_check(
         config,
@@ -4019,6 +4014,7 @@ pub(crate) fn nonlinearity<F: PrimeField + TensorType + PartialOrd + std::hash::
                     .input
                     .cartesian_coord(region.linear_coord() + i);
                 let selector = config.static_lookups.selectors.get(&(nl.clone(), x, y));
+                //println!("OP: {:?} {} {}, SEL: {:?}", nl, x, y, selector);
                 region.enable(selector, z)?;
                 Ok(())
             })

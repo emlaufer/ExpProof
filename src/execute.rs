@@ -561,7 +561,7 @@ pub async fn run(command: Commands) -> Result<String, EZKLError> {
             // TODO:....
             let compiled_circuit_path = compiled_circuit.unwrap_or(DEFAULT_COMPILED_CIRCUIT.into());
             let circuit = GraphCircuit::load(compiled_circuit_path)?;
-            println!("MODEL IS: {:?}", circuit);
+            //println!("MODEL IS: {:?}", circuit);
             Ok("Good".to_string())
         }
     }
@@ -947,6 +947,8 @@ pub(crate) async fn gen_witness(
     let mut circuit = GraphCircuit::load(compiled_circuit_path)?;
     let data: GraphData = GraphData::from_path(data)?;
     let settings = circuit.settings().clone();
+
+    *crate::circuit::table::LOOKUP_RANGE.lock().unwrap() = settings.run_args.lookup_range;
 
     let vk = if let Some(vk) = vk_path {
         Some(load_vk::<KZGCommitmentScheme<Bn256>, GraphCircuit>(
@@ -1583,7 +1585,7 @@ pub(crate) fn mock(
 
     info!("Mock proof");
 
-    println!("GOT instance: {:?}", public_inputs);
+    //println!("GOT instance: {:?}", public_inputs);
     let prover = halo2_proofs::dev::MockProver::run(
         circuit.settings().run_args.logrows,
         &circuit,

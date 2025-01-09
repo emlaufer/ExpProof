@@ -90,7 +90,7 @@ impl From<String> for EZKLError {
 use std::str::FromStr;
 
 use circuit::{table::Range, CheckMode, Tolerance};
-use clap::Args;
+use clap::{Args, Parser, ValueEnum};
 use graph::Visibility;
 use halo2_proofs::poly::{
     ipa::commitment::IPACommitmentScheme, kzg::commitment::KZGCommitmentScheme,
@@ -233,6 +233,106 @@ impl From<String> for Commitments {
     }
 }
 
+#[derive(
+    Clone, ValueEnum, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Default,
+)]
+pub enum SurrogateStrategy {
+    #[default]
+    Plain,
+    Vector,
+    Spheres,
+}
+
+impl std::fmt::Display for SurrogateStrategy {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            SurrogateStrategy::Plain => write!(f, "plain"),
+            SurrogateStrategy::Vector => write!(f, "vector"),
+            SurrogateStrategy::Spheres => write!(f, "spheres"),
+        }
+    }
+}
+
+impl ToFlags for SurrogateStrategy {
+    fn to_flags(&self) -> Vec<String> {
+        vec![format!("{}", self)]
+    }
+}
+
+#[derive(
+    Clone, ValueEnum, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Default,
+)]
+pub enum SamplingStrategy {
+    #[default]
+    Uniform,
+    Gaussian,
+    Spherical,
+}
+
+impl std::fmt::Display for SamplingStrategy {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            SamplingStrategy::Uniform => write!(f, "uniform"),
+            SamplingStrategy::Gaussian => write!(f, "gaussian"),
+            SamplingStrategy::Spherical => write!(f, "spherical"),
+        }
+    }
+}
+
+impl ToFlags for SamplingStrategy {
+    fn to_flags(&self) -> Vec<String> {
+        vec![format!("{}", self)]
+    }
+}
+
+#[derive(
+    Clone, ValueEnum, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Default,
+)]
+pub enum LimeWeightStrategy {
+    #[default]
+    Exponential,
+    Distance,
+}
+
+impl std::fmt::Display for LimeWeightStrategy {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            Self::Exponential => write!(f, "exponential"),
+            Self::Distance => write!(f, "distance"),
+        }
+    }
+}
+
+impl ToFlags for LimeWeightStrategy {
+    fn to_flags(&self) -> Vec<String> {
+        vec![format!("{}", self)]
+    }
+}
+
+#[derive(
+    Clone, ValueEnum, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Default,
+)]
+pub enum VectorInputMode {
+    #[default]
+    Surrogate,
+    Std,
+}
+
+impl std::fmt::Display for VectorInputMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            Self::Surrogate => write!(f, "surrogate"),
+            Self::Std => write!(f, "std"),
+        }
+    }
+}
+
+impl ToFlags for VectorInputMode {
+    fn to_flags(&self) -> Vec<String> {
+        vec![format!("{}", self)]
+    }
+}
+
 /// Parameters specific to a proving run
 #[derive(Debug, Args, Deserialize, Serialize, Clone, PartialEq, PartialOrd, ToFlags)]
 pub struct RunArgs {
@@ -282,12 +382,31 @@ pub struct RunArgs {
     #[arg(long, default_value = "kzg", value_hint = clap::ValueHint::Other)]
     pub commitment: Option<Commitments>,
 
+    /// Surrogate Strategy
+    /// This is gross
+    #[arg(long, default_value = "plain")]
+    pub surrogate_strategy: Option<SurrogateStrategy>,
+    #[arg(long)]
+    pub surrogate_std: Option<f64>,
+    #[arg(long)]
+    pub surrogate_n: Option<usize>,
+    #[arg(long, default_value = "1")]
+    pub surrogate_m: Option<usize>,
+    #[arg(long)]
+    pub surrogate_step: Option<f64>,
+    #[arg(long, default_value = "surrogate")]
+    pub vector_input_mode: Option<VectorInputMode>,
+
     // explain mode - usize is number of lasso samples
     // TODO: add more settings here
     #[arg(long)]
     pub generate_explanation: Option<usize>,
     #[arg(long)]
     pub surrogate_samples: Option<usize>,
+    #[arg(long, default_value = "uniform")]
+    pub lime_sampling: Option<SamplingStrategy>,
+    #[arg(long, default_value = "exponential")]
+    pub lime_weight_strategy: Option<LimeWeightStrategy>,
 
     #[arg(long, default_value = "false")]
     pub fixed_test: bool,
@@ -314,8 +433,18 @@ impl Default for RunArgs {
             rebase_frac_zero_constants: false,
             check_mode: CheckMode::UNSAFE,
             commitment: None,
+
+            surrogate_strategy: Some(SurrogateStrategy::Plain),
+            surrogate_std: Some(1.0),
+            surrogate_n: Some(10),
+            surrogate_m: Some(1),
+            surrogate_step: None,
+            vector_input_mode: Some(VectorInputMode::Surrogate),
+
             generate_explanation: None,
             surrogate_samples: None,
+            lime_sampling: Some(SamplingStrategy::Uniform),
+            lime_weight_strategy: Some(LimeWeightStrategy::Exponential),
             fixed_test: false,
             top_k: None,
         }

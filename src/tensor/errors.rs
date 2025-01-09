@@ -1,3 +1,4 @@
+use std::backtrace::Backtrace;
 use thiserror::Error;
 
 /// A wrapper for tensor related errors.
@@ -7,8 +8,8 @@ pub enum TensorError {
     #[error("dimension mismatch in tensor op: {0}")]
     DimMismatch(String),
     /// Shape when instantiating
-    #[error("dimensionality error when manipulating a tensor: {0}")]
-    DimError(String),
+    #[error("dimensionality error when manipulating a tensor: {0}, {1}")]
+    DimError(String, String),
     /// wrong method was called on a tensor-like struct
     #[error("wrong method called")]
     WrongMethod,
@@ -27,4 +28,7 @@ pub enum TensorError {
     /// Unset visibility
     #[error("unset visibility")]
     UnsetVisibility,
+    /// Lookup range error
+    #[error("lookup value out of range: {0}")]
+    LookupOutOfRange(String),
 }

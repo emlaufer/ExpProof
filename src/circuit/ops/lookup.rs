@@ -1,6 +1,8 @@
 use super::*;
 use serde::{Deserialize, Serialize};
 
+use super::super::table::LOOKUP_RANGE;
+
 use crate::{
     circuit::{layouts, table::Range, utils},
     fieldutils::{felt_to_i64, i64_to_felt},
@@ -157,6 +159,21 @@ impl LookupOp {
         x: &[Tensor<F>],
     ) -> Result<ForwardResult<F>, TensorError> {
         let x = x[0].clone().map(|x| felt_to_i64(x));
+        // ensure the input is in range...otherwise throw an error
+
+        {
+            let range = LOOKUP_RANGE.lock().unwrap();
+            x.enum_map(|_, v| {
+                if v < range.0 || v > range.1 {
+                    return Err(TensorError::LookupOutOfRange(format!(
+                        "Lookup out of range! Tensor: {:?}, passed to op: {:?}",
+                        x, self
+                    )));
+                }
+                Ok(())
+            })
+        }?;
+
         let res = match &self {
             LookupOp::Abs => Ok(tensor::ops::abs(&x)?),
             LookupOp::Ceil { scale } => Ok(tensor::ops::nonlinearities::ceil(&x, scale.into())),
@@ -336,7 +353,7 @@ impl<F: PrimeField + TensorType + PartialOrd + std::hash::Hash + IntoI64> Op<F> 
                 )
             }
             LookupOp::LimeWeight { input_scale, sigma } => {
-                format!("NORM(input_scale={}, sigma={})", input_scale, sigma)
+                format!("LIMEWEIGHT(input_scale={}, sigma={})", input_scale, sigma)
             }
         }
     }

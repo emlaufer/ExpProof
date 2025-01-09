@@ -6,8 +6,8 @@ use super::utilities::{dequantize, quantize_float};
 use super::vars::*;
 use super::GraphSettings;
 use crate::circuit::hybrid::HybridOp;
-use crate::circuit::modules::lime::{LimeConfig, LimeInputs, LimeModule};
-use crate::circuit::modules::lime2::Lime2Chip;
+use crate::circuit::modules::lime::{LimeInputs, LimeModule};
+use crate::circuit::modules::lime2::{Lime2Chip, LimeCircuit, LimeConfig, LimeWitness};
 use crate::circuit::modules::GraphModule;
 use crate::circuit::ops::poly::PolyOp;
 use crate::circuit::region::ConstantsMap;
@@ -597,9 +597,9 @@ impl Model {
         // range check for dividing off 2^8 precision later...
         let mut required_range_checks: Vec<Range> = res.range_checks.into_iter().collect();
         required_range_checks.push((-128, 128));
-        let dual_gap_tolerance = (0.1 * 2f64.powf(8.0)) as i64;
+        let dual_gap_tolerance = (0.1 * 3.0 * 2f64.powf(8.0)) as i64;
         required_range_checks.push((-dual_gap_tolerance, dual_gap_tolerance));
-        let dual_feasible_tolerance = ((0.01 * 1.5) * 2f64.powf(16.0)).ceil() as i64;
+        let dual_feasible_tolerance = ((0.01 * 3.0) * 2f64.powf(16.0)).ceil() as i64;
         required_range_checks.push((-dual_feasible_tolerance, dual_feasible_tolerance));
 
         // if we're using percentage tolerance, we need to add the necessary range check ops for it.
@@ -651,6 +651,7 @@ impl Model {
             .map(|x| x.map(|elem| ValType::Value(Value::known(elem))).into())
             .collect();
         let res = self.dummy_layout(run_args, &valtensor_inputs, witness_gen, check_lookup)?;
+        debug!("OK....");
         Ok(res.into())
     }
 
@@ -667,7 +668,7 @@ impl Model {
         use tract_onnx::{
             tract_core::internal::IntoArcTensor, tract_hir::internal::GenericFactoid,
         };
-        println!("HI");
+        //println!("HI");
 
         let mut model = tract_onnx::onnx().model_for_read(reader)?;
 
@@ -701,8 +702,7 @@ impl Model {
 
                     // TODO: replace constants
                     // FIXME(EVAN)
-                    let input_dim =
-                        (Lime2Chip::input_size(explanation_inferrences, surrogate_samples)) as i64;
+                    let input_dim = (LimeCircuit::num_points_from_run_args(run_args)) as i64 + 1;
 
                     fact.shape
                         .set_dim(i, tract_onnx::prelude::TDim::Val(input_dim));
@@ -738,7 +738,7 @@ impl Model {
 
                 // TODO: replace constants
                 // FIXME(EVAN)
-                let input_dim = Lime2Chip::input_size(explanation_inferrences, surrogate_samples);
+                let input_dim = (LimeCircuit::num_points_from_run_args(run_args)) + 1;
                 input_dim
             } else {
                 *value
@@ -811,7 +811,7 @@ impl Model {
             inputs: model.inputs.iter().map(|o| o.node).collect(),
             outputs: model.outputs.iter().map(|o| (o.node, o.slot)).collect(),
         };
-        println!("got inputs: {:?}", parsed_nodes.inputs);
+        //println!("got inputs: {:?}", parsed_nodes.inputs);
 
         let max_node = parsed_nodes
             .nodes
@@ -819,7 +819,7 @@ impl Model {
             .max_by_key(|p| p.0) // check the value of each pair for the max
             .unwrap(); // unwrap the result
 
-        println!("outputs: {:?}", parsed_nodes.outputs);
+        //println!("outputs: {:?}", parsed_nodes.outputs);
 
         // HACK: add kkt inputs here...
         if let Some(n_samples) = run_args.generate_explanation {
@@ -846,7 +846,7 @@ impl Model {
             + 1; // unwrap the result
         let output_node = &nodes.nodes[&nodes.outputs[0].0].clone();
         let input_node = &nodes.nodes[&nodes.inputs[0]].clone();
-        println!("input node: {:?}", input_node);
+        //println!("input node: {:?}", input_node);
 
         // TODO: should clean this up better...
         // Honestly adding interface for proof modules that
@@ -1222,21 +1222,22 @@ impl Model {
         let output = &vars.advices[2];
         let index = &vars.advices[1];
         for op in required_lookups {
+            println!("configuring lookup: {:?}", op);
             base_gate.configure_lookup(meta, input, output, index, lookup_range, logrows, &op)?;
         }
 
         use crate::circuit::utils::F32;
-        let op = crate::circuit::ops::lookup::LookupOp::Norm {
-            scale: F32(2f32.powf(8.0)),
-            mean: F32(0f32),
-            std: F32(1f32),
-        };
-        base_gate
-            .configure_lookup(meta, input, output, index, lookup_range, logrows, &op)
-            .unwrap();
+        //let op = crate::circuit::ops::lookup::LookupOp::Norm {
+        //    scale: F32(2f32.powf(8.0)),
+        //    mean: F32(0f32),
+        //    std: F32(1f32),
+        //};
+        //base_gate
+        //    .configure_lookup(meta, input, output, index, lookup_range, logrows, &op)
+        //    .unwrap();
 
         for range in required_range_checks {
-            println!("configureing range: {:?}", range);
+            //println!("configureing range: {:?}", range);
             base_gate.configure_range_check(meta, input, index, range, logrows)?;
         }
 
@@ -1276,14 +1277,11 @@ impl Model {
         vars: &mut ModelVars<Fp>,
         witnessed_outputs: &[ValTensor<Fp>],
         constants: &mut ConstantsMap<Fp>,
-        lime_chip: &Lime2Chip,
-        local_surrogate: &Option<ValTensor<Fp>>,
-        lime_model: &ValTensor<Fp>,
-        lime_intercept: &ValTensor<Fp>,
-        dual_model: &ValTensor<Fp>,
-        lime_model_topk: &ValTensor<Fp>,
-        lime_model_topk_idxs: &ValTensor<Fp>,
-        // TODO: make cleanner...
+
+        // TODO: move to outer function?
+        lime_circuit: &Option<LimeCircuit>,
+        lime_config: &Option<LimeConfig>,
+        lime_witness: &Option<LimeWitness>,
     ) -> Result<Vec<ValTensor<Fp>>, GraphError> {
         info!("model layout...");
 
@@ -1291,7 +1289,10 @@ impl Model {
 
         let mut results = BTreeMap::<usize, Vec<ValTensor<Fp>>>::new();
 
-        let samples = lime_chip.layout_samples(layouter).unwrap();
+        let samples = lime_circuit.as_ref().map(|c| {
+            c.layout_samples(&lime_config.as_ref().unwrap(), layouter)
+                .expect("Failed to layout lime samples")
+        });
 
         // TODO: modify input shapes when lime involved...that way
         //  this should just work as intended...
@@ -1334,60 +1335,83 @@ impl Model {
                 // we need to do this as this loop is called multiple times
                 vars.set_instance_idx(instance_idx);
 
-                let model_input = lime_chip
-                    .layout(
-                        &config.base,
-                        &mut thread_safe_region,
-                        &inputs[0],
-                        local_surrogate,
-                        &samples,
-                    )
-                    .unwrap();
-                results.insert(0, vec![model_input.clone()]);
+                lime_circuit.as_ref().map(|c| {
+                    let model_input = c
+                        .layout_inputs(
+                            &lime_config.as_ref().unwrap(),
+                            &config.base,
+                            &mut thread_safe_region,
+                            &inputs[0],
+                            &ValTensor::<_>::known_from_vec(&vec![
+                                lime_witness.as_ref().unwrap().std,
+                            ]),
+                            &ValTensor::<_>::known_from_vec(
+                                &lime_witness.as_ref().unwrap().surrogate,
+                            ),
+                            &&samples.as_ref().unwrap(),
+                        )
+                        .unwrap();
+                    results.insert(0, vec![model_input.clone()]);
+                });
 
+                //println!("MODEL INPUT: {:?}", model_input.pshow(8));
                 let outputs = self
                     .layout_nodes(&mut config, &mut thread_safe_region, &mut results)
                     .map_err(|e| {
                         error!("{}", e);
                         halo2_proofs::plonk::Error::Synthesis
                     })?;
+                log::debug!("STARTING LIME LAYOUT");
 
-                if (crate::USE_SURROGATE) {
-                    lime_chip.layout_ball_checks(
+                lime_circuit.as_ref().map(|c| {
+                    c.layout_checks(
+                        &lime_config.as_ref().unwrap(),
                         &config.base,
                         &mut thread_safe_region,
+                        &ValTensor::<_>::known_from_vec(&lime_witness.as_ref().unwrap().surrogate),
+                        &results[&0][0],
                         &outputs[0],
+                        &lime_witness.as_ref().unwrap(),
                     );
-                    lime_chip.layout_lime_checks(
-                        &config.base,
-                        &mut thread_safe_region,
-                        &local_surrogate.clone().unwrap(),
-                        &model_input,
-                        &outputs[0],
-                        lime_model,
-                        lime_intercept,
-                        dual_model,
-                    );
-                } else {
-                    lime_chip.layout_lime_checks(
-                        &config.base,
-                        &mut thread_safe_region,
-                        &inputs[0],
-                        &model_input,
-                        &outputs[0],
-                        lime_model,
-                        lime_intercept,
-                        dual_model,
-                    );
-                }
-                lime_chip.layout_top_k_checks(
-                    &config.base,
-                    &mut thread_safe_region,
-                    lime_model,
-                    lime_model_topk,
-                    lime_model_topk_idxs,
-                    run_args.top_k.unwrap(),
-                );
+                });
+
+                //if (crate::USE_SURROGATE) {
+                //    lime_chip.layout_ball_checks(
+                //        &config.base,
+                //        &mut thread_safe_region,
+                //        &outputs[0],
+                //    );
+                //    lime_chip.layout_lime_checks(
+                //        &config.base,
+                //        &mut thread_safe_region,
+                //        &local_surrogate.clone().unwrap(),
+                //        &model_input,
+                //        &outputs[0],
+                //        lime_model,
+                //        lime_intercept,
+                //        dual_model,
+                //    );
+                //} else {
+                //    lime_chip.layout_lime_checks(
+                //        &config.base,
+                //        &mut thread_safe_region,
+                //        &inputs[0],
+                //        &model_input,
+                //        &outputs[0],
+                //        lime_model,
+                //        lime_intercept,
+                //        dual_model,
+                //    );
+                //}
+                //lime_chip.layout_top_k_checks(
+                //    &config.base,
+                //    &mut thread_safe_region,
+                //    lime_model,
+                //    lime_model_topk,
+                //    lime_model_topk_idxs,
+                //    run_args.top_k.unwrap(),
+                //);
+                log::debug!("DONE LIME LAYOUT");
 
                 if run_args.output_visibility.is_public() || run_args.output_visibility.is_fixed() {
                     let output_scales = self.graph.get_output_scales().map_err(|e| {
@@ -1417,7 +1441,7 @@ impl Model {
                                 witnessed_outputs[i].clone()
                             };
 
-                            println!("GOT: {:#?},\n\n {:#?}", output.clone(), comparators);
+                            //println!("GOT: {:#?},\n\n {:#?}", output.clone(), comparators);
                             config
                                 .base
                                 .layout(
@@ -1436,14 +1460,14 @@ impl Model {
                     if let Some(lime_module) = &self.lime_module {
                         let inputs2 = results[&self.graph.inputs[0]][0].clone();
                         let outputs = outputs[0].clone();
-                        println!("inputs: {:?}", inputs);
-                        println!("self.graph.inputs: {:?}", self.graph.inputs);
+                        //println!("inputs: {:?}", inputs);
+                        //println!("self.graph.inputs: {:?}", self.graph.inputs);
                         let coeffs = results[&self.graph.inputs[1]][0].clone();
                         let intercept = results[&self.graph.inputs[2]][0].clone();
-                        println!(
-                            "INPUTS: {:?}, INPUTS; {:?}, OUTPUTS: {:?}, COEFF: {:?}, INT: {:?}",
-                            inputs, inputs2, outputs, coeffs, intercept
-                        );
+                        //println!(
+                        //    "INPUTS: {:?}, INPUTS; {:?}, OUTPUTS: {:?}, COEFF: {:?}, INT: {:?}",
+                        //    inputs, inputs2, outputs, coeffs, intercept
+                        //);
                         lime_module.layout(
                             &config.base,
                             &mut thread_safe_region,
@@ -1515,7 +1539,6 @@ impl Model {
 
             match &node {
                 NodeType::Node(n) => {
-                    debug!("hi1: {:?}", n);
                     let res = if node.is_constant() && node.num_uses() == 1 {
                         log::debug!("node {} is a constant with 1 use", n.idx);
                         let mut node = n.clone();
@@ -1533,16 +1556,13 @@ impl Model {
                                 halo2_proofs::plonk::Error::Synthesis
                             })?
                     };
-                    debug!("hi2");
 
                     if let Some(mut vt) = res {
                         vt.reshape(&node.out_dims()[0])?;
                         // we get the max as for fused nodes this corresponds to the node output
                         results.insert(*idx, vec![vt.clone()]);
                         //only use with mock prover
-                        debug!("------------ output node {:?}: {:?}", idx, vt.show());
                     }
-                    debug!("hi3");
                 }
                 NodeType::SubGraph {
                     model,
@@ -1702,26 +1722,29 @@ impl Model {
         let mut region =
             RegionCtx::new_dummy(0, run_args.num_inner_cols, witness_gen, check_lookup);
 
+        println!("INPUTS; {:?}", inputs);
         let outputs = self.layout_nodes(&mut model_config, &mut region, &mut results)?;
+        //println!("OUTPUTS: {:?}", outputs);
 
-        if let Some(lime_module) = &self.lime_module {
-            let inputs2 = results[&self.graph.inputs[0]][0].clone();
-            let outputs = outputs[0].clone();
-            //println!("inputs: {:?}", inputs);
-            //println!("self.graph.inputs: {:?}", self.graph.inputs);
-            let coeffs = results[&self.graph.inputs[1]][0].clone();
-            let intercept = results[&self.graph.inputs[2]][0].clone();
-            //println!(
-            //    "INPUTS: {:?}, INPUTS; {:?}, OUTPUTS: {:?}, COEFF: {:?}, INT: {:?}",
-            //    inputs, inputs2, outputs, coeffs, intercept
-            //);
-            lime_module.layout(
-                &mut model_config.base,
-                &mut region,
-                &[inputs2, outputs, coeffs, intercept],
-            );
-        }
+        //if let Some(lime_module) = &self.lime_module {
+        //    let inputs2 = results[&self.graph.inputs[0]][0].clone();
+        //    let outputs = outputs[0].clone();
+        //    //println!("inputs: {:?}", inputs);
+        //    //println!("self.graph.inputs: {:?}", self.graph.inputs);
+        //    let coeffs = results[&self.graph.inputs[1]][0].clone();
+        //    let intercept = results[&self.graph.inputs[2]][0].clone();
+        //    //println!(
+        //    //    "INPUTS: {:?}, INPUTS; {:?}, OUTPUTS: {:?}, COEFF: {:?}, INT: {:?}",
+        //    //    inputs, inputs2, outputs, coeffs, intercept
+        //    //);
+        //    lime_module.layout(
+        //        &mut model_config.base,
+        //        &mut region,
+        //        &[inputs2, outputs, coeffs, intercept],
+        //    );
+        //}
 
+        log::debug!("HEY THERE");
         if self.visibility.output.is_public() || self.visibility.output.is_fixed() {
             let output_scales = self.graph.get_output_scales()?;
             let res = outputs
@@ -1738,11 +1761,18 @@ impl Model {
                         })
                         .collect::<Vec<_>>()
                         .into();
+                    println!(
+                        "output.dims(): {:?}, len: {:?}",
+                        output.dims(),
+                        output.len()
+                    );
                     comparator.reshape(output.dims())?;
+                    println!("RESHAPE!");
 
                     let mut tolerance = run_args.tolerance;
                     tolerance.scale = scale_to_multiplier(output_scales[i]).into();
 
+                    println!("LAYOUT!");
                     dummy_config.layout(
                         &mut region,
                         &[output.clone(), comparator],
@@ -1750,6 +1780,7 @@ impl Model {
                     )
                 })
                 .collect::<Result<Vec<_>, _>>();
+            println!("DONE!");
             res?;
         } else if !self.visibility.output.is_private() {
             for output in &outputs {
@@ -1764,6 +1795,7 @@ impl Model {
         #[cfg(not(target_arch = "wasm32"))]
         region.debug_report();
 
+        println!("OUTPUTS ARE :{:?}", outputs);
         let outputs = outputs
             .iter()
             .map(|x| {
@@ -1787,6 +1819,7 @@ impl Model {
             shuffle_col_coord: region.shuffle_col_coord(),
             outputs,
         };
+        debug!("DONE DUMMY LAYOUT");
 
         Ok(res)
     }

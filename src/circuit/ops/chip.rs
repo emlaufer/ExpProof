@@ -538,71 +538,74 @@ impl<F: PrimeField + TensorType + PartialOrd + std::hash::Hash + IntoI64> BaseCo
                     .enumerate()
                     .zip(table.table_outputs.iter())
                 {
-                    cs.lookup("", |cs| {
-                        let mut res = vec![];
-                        let sel = cs.query_selector(multi_col_selector);
+                    cs.lookup(
+                        &<crate::circuit::ops::lookup::LookupOp as crate::circuit::ops::Op<F>>::as_string(nl),
+                        |cs| {
+                            let mut res = vec![];
+                            let sel = cs.query_selector(multi_col_selector);
 
-                        let synthetic_sel = match len {
-                            1 => Expression::Constant(F::from(1)),
-                            _ => match index {
+                            let synthetic_sel = match len {
+                                1 => Expression::Constant(F::from(1)),
+                                _ => match index {
+                                    VarTensor::Advice { inner: advices, .. } => {
+                                        cs.query_advice(advices[x][y], Rotation(0))
+                                    }
+                                    _ => unreachable!(),
+                                },
+                            };
+
+                            let input_query = match &input {
                                 VarTensor::Advice { inner: advices, .. } => {
                                     cs.query_advice(advices[x][y], Rotation(0))
                                 }
                                 _ => unreachable!(),
-                            },
-                        };
+                            };
 
-                        let input_query = match &input {
-                            VarTensor::Advice { inner: advices, .. } => {
-                                cs.query_advice(advices[x][y], Rotation(0))
-                            }
-                            _ => unreachable!(),
-                        };
+                            let output_query = match &output {
+                                VarTensor::Advice { inner: advices, .. } => {
+                                    cs.query_advice(advices[x][y], Rotation(0))
+                                }
+                                _ => unreachable!(),
+                            };
 
-                        let output_query = match &output {
-                            VarTensor::Advice { inner: advices, .. } => {
-                                cs.query_advice(advices[x][y], Rotation(0))
-                            }
-                            _ => unreachable!(),
-                        };
+                            // we index from 1 to avoid the zero element creating soundness issues
+                            // this is 0 if the index is the same as the column index (starting from 1)
 
-                        // we index from 1 to avoid the zero element creating soundness issues
-                        // this is 0 if the index is the same as the column index (starting from 1)
+                            let col_expr = sel.clone()
+                                * table
+                                    .selector_constructor
+                                    .get_expr_at_idx(col_idx, synthetic_sel);
 
-                        let col_expr = sel.clone()
-                            * table
-                                .selector_constructor
-                                .get_expr_at_idx(col_idx, synthetic_sel);
+                            let multiplier =
+                                table.selector_constructor.get_selector_val_at_idx(col_idx);
 
-                        let multiplier =
-                            table.selector_constructor.get_selector_val_at_idx(col_idx);
+                            let not_expr = Expression::Constant(multiplier) - col_expr.clone();
 
-                        let not_expr = Expression::Constant(multiplier) - col_expr.clone();
+                            let (default_x, default_y) = table.get_first_element(col_idx);
 
-                        let (default_x, default_y) = table.get_first_element(col_idx);
+                            log::trace!("---------------- col {:?} ------------------", col_idx,);
+                            log::trace!("expr: {:?}", col_expr,);
+                            log::trace!("multiplier: {:?}", multiplier);
+                            log::trace!("not_expr: {:?}", not_expr);
+                            log::trace!("default x: {:?}", default_x);
+                            log::trace!("default y: {:?}", default_y);
 
-                        log::trace!("---------------- col {:?} ------------------", col_idx,);
-                        log::trace!("expr: {:?}", col_expr,);
-                        log::trace!("multiplier: {:?}", multiplier);
-                        log::trace!("not_expr: {:?}", not_expr);
-                        log::trace!("default x: {:?}", default_x);
-                        log::trace!("default y: {:?}", default_y);
+                            res.extend([
+                                (
+                                    col_expr.clone() * input_query.clone()
+                                        + not_expr.clone() * Expression::Constant(default_x),
+                                    *input_col,
+                                ),
+                                (
+                                    col_expr.clone() * output_query.clone()
+                                        + not_expr.clone() * Expression::Constant(default_y),
+                                    *output_col,
+                                ),
+                            ]);
 
-                        res.extend([
-                            (
-                                col_expr.clone() * input_query.clone()
-                                    + not_expr.clone() * Expression::Constant(default_x),
-                                *input_col,
-                            ),
-                            (
-                                col_expr.clone() * output_query.clone()
-                                    + not_expr.clone() * Expression::Constant(default_y),
-                                *output_col,
-                            ),
-                        ]);
-
-                        res
-                    });
+                            res
+                        },
+                    );
                 }
                 self.static_lookups
                     .selectors

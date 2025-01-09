@@ -141,8 +141,6 @@ impl<F: TensorType + PrimeField + PartialOrd + IntoI64> LassoModel<F> {
         x: &Tensor<F>,
         input_scale: Scale,
         output_scale: Scale,
-        n_surrogate_samples: usize,
-        n_lasso_samples: usize,
     ) -> Option<Tensor<F>>
     where
         G: Fn(Tensor<F>) -> Result<Tensor<F>, GraphError>,
@@ -159,30 +157,30 @@ impl<F: TensorType + PrimeField + PartialOrd + IntoI64> LassoModel<F> {
             // TODO: handle different shapes...
             let label = classify(x).unwrap();
 
-            println!("LABEL: {:?}", label);
+            //println!("LABEL: {:?}", label);
             // dequantize result
             let dequant = label.dequantize(output_scale);
-            println!("dequant: {:?}", dequant);
+            //println!("dequant: {:?}", dequant);
             dequant
         };
 
         let x_dequant = x.dequantize(input_scale);
         let target_class = 1.0 - classify_wrapper(x_dequant.clone())[0];
-        println!("GOT TARGET CLASS: {:?}", target_class);
+        //println!("GOT TARGET CLASS: {:?}", target_class);
 
         let local_surrogate = Self::find_closest_enemy(classify_wrapper, &x_dequant, target_class);
-        println!("LOCAL SURROGATE float: {:?}", local_surrogate);
+        //println!("LOCAL SURROGATE float: {:?}", local_surrogate);
         let local_surrogate = local_surrogate.quantize(input_scale).unwrap();
-        println!("LOCAL SURROGATE: {}", local_surrogate.show());
+        //println!("LOCAL SURROGATE: {}", local_surrogate.show());
 
-        println!(
-            "LOCAL SURROGATE INT: {:?}",
-            local_surrogate
-                .iter()
-                .map(|v| felt_to_i64(*v))
-                .collect::<Vec<_>>()
-        );
-        println!("x: {:?}", x);
+        //println!(
+        //    "LOCAL SURROGATE INT: {:?}",
+        //    local_surrogate
+        //        .iter()
+        //        .map(|v| felt_to_i64(*v))
+        //        .collect::<Vec<_>>()
+        //);
+        //println!("x: {:?}", x);
 
         return Some(local_surrogate);
     }
@@ -218,7 +216,7 @@ impl<F: TensorType + PrimeField + PartialOrd + IntoI64> LassoModel<F> {
         let square_distance = square_distance
             .enum_map::<_, _, Error>(|i, v| Ok(v / 2i64.pow(8)))
             .unwrap();
-        println!("SQUARE DIST: {:?}", square_distance);
+        //println!("SQUARE DIST: {:?}", square_distance);
         //println!("SQUARE DIST SCALED: {:?}", square_distance);
 
         let weights = crate::tensor::ops::nonlinearities::lime_weight(
@@ -245,22 +243,22 @@ impl<F: TensorType + PrimeField + PartialOrd + IntoI64> LassoModel<F> {
         k: usize,
     ) -> (Tensor<F>, Tensor<F>, Tensor<F>, F, Tensor<F>) {
         let sqrt_weights = Self::compute_weights(x, inputs);
-        println!("weights: {:?}", sqrt_weights);
+        //println!("weights: {:?}", sqrt_weights);
 
         let inputs = mult(&[inputs.clone(), sqrt_weights.clone()]).unwrap();
         let outputs = mult(&[outputs.clone(), sqrt_weights.clone()]).unwrap();
 
         let inputs_float = inputs.dequantize(input_scale + 8);
         let outputs_float = outputs.dequantize(output_scale + 8);
-        println!("INPUTS ARE: {:?}", inputs_float);
-        println!("OUTPUTS ARE: {:?}", outputs_float);
+        //println!("INPUTS ARE: {:?}", inputs_float);
+        //println!("OUTPUTS ARE: {:?}", outputs_float);
 
         let input_shape = inputs.dims();
         let output_shape = outputs.dims();
 
         // TODO: compute the kernel here... and use modified lime algorithm
-        println!("Inputs: {:?}", inputs_float.to_vec());
-        println!("outputs: {:?}", outputs_float.to_vec());
+        //println!("Inputs: {:?}", inputs_float.to_vec());
+        //println!("outputs: {:?}", outputs_float.to_vec());
         let inputs_linfa =
             Array::from_shape_vec((input_shape[0], input_shape[1]), inputs_float.to_vec()).unwrap();
         let outputs_linfa = Array::from_shape_vec(output_shape[0], outputs_float.to_vec()).unwrap();
@@ -276,7 +274,7 @@ impl<F: TensorType + PrimeField + PartialOrd + IntoI64> LassoModel<F> {
             .fit(&data)
             .unwrap();
 
-        println!("LASSO model: {:?}", model);
+        //println!("LASSO model: {:?}", model);
 
         let dual: Array<f64, _> =
             (outputs_linfa - model.intercept() - inputs_linfa.dot(model.hyperplane()))
@@ -284,9 +282,9 @@ impl<F: TensorType + PrimeField + PartialOrd + IntoI64> LassoModel<F> {
 
         let hyperplane = model.hyperplane().to_vec();
         let dual: Vec<f64> = dual.to_vec();
-        println!("hyperplane: {:?}", hyperplane);
-        println!("intercept: {:?}", model.intercept());
-        println!("dual: {:?}", dual);
+        //println!("hyperplane: {:?}", hyperplane);
+        //println!("intercept: {:?}", model.intercept());
+        //println!("dual: {:?}", dual);
 
         // TODO(EVAN): could there be issues with rounding? No right?
         let mut top_k = hyperplane.clone();
@@ -299,8 +297,8 @@ impl<F: TensorType + PrimeField + PartialOrd + IntoI64> LassoModel<F> {
                 .unwrap()
         });
         let top_k_idx = top_k_idx[hyperplane.len() - k..].to_vec();
-        println!("top_k: {:?}", top_k);
-        println!("top_k_idx: {:?}", top_k_idx);
+        //println!("top_k: {:?}", top_k);
+        //println!("top_k_idx: {:?}", top_k_idx);
         let coeffs = Tensor::new(Some(&hyperplane), &[hyperplane.len()])
             .unwrap()
             .quantize(model_scale)
@@ -309,8 +307,8 @@ impl<F: TensorType + PrimeField + PartialOrd + IntoI64> LassoModel<F> {
             .unwrap()
             .quantize(model_scale)
             .unwrap();
-        println!("COEFFS: {:?}", coeffs.show());
-        println!("topk: {:?}", top_k.show());
+        //println!("COEFFS: {:?}", coeffs.show());
+        //println!("topk: {:?}", top_k.show());
         let top_k_idx = Tensor::new(Some(&top_k_idx), &[top_k_idx.len()])
             .unwrap()
             .enum_map::<_, _, Error>(|i, v| Ok(i64_to_felt(v as i64)))
@@ -324,27 +322,27 @@ impl<F: TensorType + PrimeField + PartialOrd + IntoI64> LassoModel<F> {
         //.quantize(model_scale)
         //.unwrap();
 
-        println!(
-            "Inputs int: {:?}",
-            inputs.iter().map(|v| felt_to_i64(*v)).collect::<Vec<_>>()
-        );
-        println!(
-            "Outputs int: {:?}",
-            outputs.iter().map(|v| felt_to_i64(*v)).collect::<Vec<_>>()
-        );
-        println!(
-            "hyperplane int: {:?}",
-            coeffs.iter().map(|v| felt_to_i64(*v)).collect::<Vec<_>>()
-        );
-        println!("intercept int: {:?}", felt_to_i64(intercept));
-        println!(
-            "dual int: {:?}",
-            dual.iter().map(|v| felt_to_i64(*v)).collect::<Vec<_>>()
-        );
-        println!(
-            "topk int: {:?}",
-            top_k.iter().map(|v| felt_to_i64(*v)).collect::<Vec<_>>()
-        );
+        //println!(
+        //    "Inputs int: {:?}",
+        //    inputs.iter().map(|v| felt_to_i64(*v)).collect::<Vec<_>>()
+        //);
+        //println!(
+        //    "Outputs int: {:?}",
+        //    outputs.iter().map(|v| felt_to_i64(*v)).collect::<Vec<_>>()
+        //);
+        //println!(
+        //    "hyperplane int: {:?}",
+        //    coeffs.iter().map(|v| felt_to_i64(*v)).collect::<Vec<_>>()
+        //);
+        //println!("intercept int: {:?}", felt_to_i64(intercept));
+        //println!(
+        //    "dual int: {:?}",
+        //    dual.iter().map(|v| felt_to_i64(*v)).collect::<Vec<_>>()
+        //);
+        //println!(
+        //    "topk int: {:?}",
+        //    top_k.iter().map(|v| felt_to_i64(*v)).collect::<Vec<_>>()
+        //);
 
         (coeffs, top_k, top_k_idx, intercept, dual)
     }
@@ -361,7 +359,7 @@ impl<F: TensorType + PrimeField + PartialOrd + IntoI64> LassoModel<F> {
         let mut closest_enemy = None;
         let mut radius = MU;
 
-        println!("shrinking...");
+        //println!("shrinking...");
         while n_enemies > 0 {
             (n_enemies, _) =
                 Self::find_enemies_in_layer(&classify, x, target_class, radius, 0.0, N, true);

@@ -29,6 +29,7 @@ serde_json = { version = "1.0.97", default_features = false, features = [
     "float_roundtrip",
     "raw_value",
 ], optional = true }
+serde_traitobject = "0.2.8"
 log = { version = "0.4.17", default_features = false, optional = true }
 thiserror = { version = "1.0.38", default_features = false }
 hex = { version = "0.4.3", default_features = false }
@@ -50,6 +51,8 @@ linfa = "0.7.0"
 ndarray = "0.15"
 rand_distr = "0.4.3"
 statrs = "0.17.1"
+dyn-clone = "1.0.17"
+anyhow = {version = "1.0.94", features = ["backtrace"]}
 
 # evm related deps
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
@@ -213,8 +216,8 @@ metal = ["dep:metal", "dep:objc"]
 #icicle = { git = "https://github.com/ingonyama-zk/icicle?rev=45b00fb", package = "icicle", branch = "fix/vhnat/ezkl-build-fix" }
 icicle = { path = "../icicle" }
 
-#[patch.'https://github.com/zkonduit/halo2']
-#halo2_proofs = { git = "https://github.com/emlaufer/halo2", branch = "ac/optional-selector-poly" }
+[patch.'https://github.com/zkonduit/halo2']
+halo2_proofs = { git = "https://github.com/emlaufer/halo2", branch = "ac/optional-selector-poly" }
 
 
 [profile.release]

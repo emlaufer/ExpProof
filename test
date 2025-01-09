@@ -1,0 +1,8 @@
+[*] [2025-01-07 23:46:18, ezkl] - command: 
+ |   {
+ |    "Mock": {
+ |      "model": "model.compiled",
+ |      "witness": "witness.json"
+ |    }
+ |  }
+[E] [2025-01-07 23:46:18, ezkl] - [graph] [io] (model.compiled) No such file or directory (os error 2)

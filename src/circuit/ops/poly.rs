@@ -3,6 +3,8 @@ use crate::{
     tensor::{self, Tensor, TensorError},
 };
 
+use std::backtrace::Backtrace;
+
 use super::{base::BaseOp, *};
 
 #[allow(missing_docs)]
@@ -280,6 +282,7 @@ impl<
                 if values.len() != 1 {
                     return Err(TensorError::DimError(
                         "Pad operation requires a single input".to_string(),
+                        format!("{}", Backtrace::capture()),
                     )
                     .into());
                 }

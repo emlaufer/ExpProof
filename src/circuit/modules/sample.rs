@@ -97,7 +97,7 @@ impl<const BITS: usize> SampleChip<BITS> {
     /// Configure
     pub fn configure(meta: &mut ConstraintSystem<Fp>, n: usize) -> Self {
         //  instantiate the required columns
-        println!("MAKING N SAMPLES: {:?}", n);
+        //println!("MAKING N SAMPLES: {:?}", n);
         let hash_inputs = (0..POSEIDON_WIDTH)
             .map(|_| meta.advice_column())
             .collect::<Vec<_>>();
@@ -151,7 +151,7 @@ impl<const BITS: usize> SampleChip<BITS> {
 
         // ignore remainer
         let ignore_hash_remainder = (Fp::NUM_BITS as usize) % BITS != 0;
-        println!("N HASHES: {:?}", n_hashes);
+        //println!("N HASHES: {:?}", n_hashes);
 
         let hasher = halo2_gadgets::poseidon::primitives::Hash::<
             _,
@@ -167,7 +167,7 @@ impl<const BITS: usize> SampleChip<BITS> {
             hashes.push(hash);
         }
 
-        println!("hashes: {:?}", hashes);
+        //println!("hashes: {:?}", hashes);
 
         let mut rng = thread_rng();
 
@@ -195,8 +195,6 @@ impl<const BITS: usize> SampleChip<BITS> {
         &self,
         layouter: &mut impl Layouter<Fp>,
     ) -> Result<Vec<AssignedCell<Fp, Fp>>, ModuleError> {
-        // TODO MAJOR: need to sign extend...or else the rng only goes positive direction...
-        // WAIT easy...just subtract by half range.........
         let perts_per_hash = (Fp::NUM_BITS as usize) / BITS;
         let n_hashes = ((self.config.n as f64) / (perts_per_hash as f64)).ceil() as usize;
 
@@ -221,7 +219,7 @@ impl<const BITS: usize> SampleChip<BITS> {
             )?;
             hash_inputs.push(res);
         }
-        println!("HASHE inputs: {:?}", hash_inputs);
+        //println!("HASHE inputs: {:?}", hash_inputs);
 
         let mut hashes = vec![];
         for i in 0..n_hashes {
@@ -234,8 +232,8 @@ impl<const BITS: usize> SampleChip<BITS> {
             )?;
 
             let hash = hasher.hash(layouter.namespace(|| "hash"), [hash_inputs[i].clone()])?;
-            println!("hash: {:?}", hash);
-            println!("n-bits: {:?}", Fp::NUM_BITS);
+            //println!("hash: {:?}", hash);
+            //println!("n-bits: {:?}", Fp::NUM_BITS);
             hashes.push(hash);
         }
 

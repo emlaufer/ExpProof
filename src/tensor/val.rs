@@ -225,6 +225,15 @@ pub enum ValTensor<F: PrimeField + TensorType + PartialOrd> {
     },
 }
 
+impl<F: PrimeField + TensorType + PartialOrd> ValTensor<F> {
+    pub fn known_from_vec(vec: &Vec<F>) -> Self {
+        vec.iter()
+            .map(|v| ValType::Value(Value::known(v.clone())))
+            .collect::<Vec<_>>()
+            .into()
+    }
+}
+
 impl<F: PrimeField + TensorType + PartialOrd> TensorType for ValTensor<F> {
     fn zero() -> Option<Self> {
         Some(ValTensor::Value {
@@ -690,10 +699,13 @@ impl<F: PrimeField + TensorType + PartialOrd + std::hash::Hash> ValTensor<F> {
             }
             ValTensor::Instance { dims: d, idx, .. } => {
                 if d[*idx].iter().product::<usize>() != new_dims.iter().product::<usize>() {
-                    return Err(TensorError::DimError(format!(
-                        "Cannot reshape {:?} to {:?} as they have number of elements",
-                        d[*idx], new_dims
-                    )));
+                    return Err(TensorError::DimError(
+                        format!(
+                            "Cannot reshape {:?} to {:?} as they have number of elements",
+                            d[*idx], new_dims
+                        ),
+                        format!("{}", Backtrace::capture()),
+                    ));
                 }
                 d[*idx] = new_dims.to_vec();
             }

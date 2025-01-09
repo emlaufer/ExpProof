@@ -19,6 +19,7 @@ use maybe_rayon::{
 };
 use ndarray::{ArrayBase, Data};
 use serde::{Deserialize, Serialize};
+use std::backtrace::Backtrace;
 pub use val::*;
 pub use var::*;
 
@@ -574,11 +575,14 @@ impl<T: Clone + TensorType> Tensor<T> {
         match values {
             Some(v) => {
                 if total_dims != v.len() {
-                    return Err(TensorError::DimError(format!(
-                        "Cannot create tensor of length {} with dims {:?}",
-                        v.len(),
-                        dims
-                    )));
+                    return Err(TensorError::DimError(
+                        format!(
+                            "Cannot create tensor of length {} with dims {:?}",
+                            v.len(),
+                            dims
+                        ),
+                        format!("{}", Backtrace::capture()),
+                    ));
                 }
                 Ok(Tensor {
                     inner: Vec::from(v),
@@ -753,10 +757,13 @@ impl<T: Clone + TensorType> Tensor<T> {
             return Ok(self.clone());
         }
         if self.dims.len() < indices.len() {
-            return Err(TensorError::DimError(format!(
-                "The dimensionality of the slice {:?} is greater than the tensor's {:?}",
-                indices, self.dims
-            )));
+            return Err(TensorError::DimError(
+                format!(
+                    "The dimensionality of the slice {:?} is greater than the tensor's {:?}",
+                    indices, self.dims
+                ),
+                format!("{}", Backtrace::capture()),
+            ));
         } else if indices.iter().map(|x| x.end - x.start).collect::<Vec<_>>() == self.dims {
             // else if slice is the same as dims, return self
             return Ok(self.clone());
@@ -808,10 +815,13 @@ impl<T: Clone + TensorType> Tensor<T> {
             return Ok(());
         }
         if self.dims.len() < indices.len() {
-            return Err(TensorError::DimError(format!(
-                "The dimensionality of the slice {:?} is greater than the tensor's {:?}",
-                indices, self.dims
-            )));
+            return Err(TensorError::DimError(
+                format!(
+                    "The dimensionality of the slice {:?} is greater than the tensor's {:?}",
+                    indices, self.dims
+                ),
+                format!("{}", Backtrace::capture()),
+            ));
         }
 
         // if indices weren't specified we fill them in as required
@@ -991,6 +1001,7 @@ impl<T: Clone + TensorType> Tensor<T> {
             if !(self.len() == 1 || self.is_empty()) {
                 return Err(TensorError::DimError(
                     "Cannot reshape to empty tensor".to_string(),
+                    format!("{}", Backtrace::capture()),
                 ));
             }
             self.dims = vec![];
@@ -1001,11 +1012,14 @@ impl<T: Clone + TensorType> Tensor<T> {
                 0
             };
             if self.len() != product {
-                return Err(TensorError::DimError(format!(
-                    "Cannot reshape tensor of length {} to {:?}",
-                    self.len(),
-                    new_dims
-                )));
+                return Err(TensorError::DimError(
+                    format!(
+                        "Cannot reshape tensor of length {} to {:?}",
+                        self.len(),
+                        new_dims
+                    ),
+                    format!("{}", Backtrace::capture()),
+                ));
             }
             self.dims = Vec::from(new_dims);
         }
@@ -1080,6 +1094,7 @@ impl<T: Clone + TensorType> Tensor<T> {
                 } else {
                     return Err(TensorError::DimError(
                         "Unknown condition for moving the axis".to_string(),
+                        format!("{}", Backtrace::capture()),
                     ));
                 }
             }
@@ -1165,11 +1180,14 @@ impl<T: Clone + TensorType> Tensor<T> {
     /// ```
     pub fn expand(&self, shape: &[usize]) -> Result<Self, TensorError> {
         if self.dims().len() > shape.len() {
-            return Err(TensorError::DimError(format!(
-                "Cannot expand {:?} to the smaller shape {:?}",
-                self.dims(),
-                shape
-            )));
+            return Err(TensorError::DimError(
+                format!(
+                    "Cannot expand {:?} to the smaller shape {:?}",
+                    self.dims(),
+                    shape
+                ),
+                format!("{}", Backtrace::capture()),
+            ));
         }
 
         if shape == self.dims() {
@@ -1178,10 +1196,13 @@ impl<T: Clone + TensorType> Tensor<T> {
 
         for d in self.dims() {
             if !(shape.contains(d) || *d == 1) {
-                return Err(TensorError::DimError(format!(
-                    "The current dimension {} must be contained in the new shape {:?} or be 1",
-                    d, shape
-                )));
+                return Err(TensorError::DimError(
+                    format!(
+                        "The current dimension {} must be contained in the new shape {:?} or be 1",
+                        d, shape
+                    ),
+                    format!("{}", Backtrace::capture()),
+                ));
             }
         }
 
@@ -1907,6 +1928,7 @@ pub fn get_broadcasted_shape(
         (a, b) if a > b => Ok(shape_a.to_vec()),
         _ => Err(TensorError::DimError(
             "Unknown condition for broadcasting".to_string(),
+            format!("{}", Backtrace::capture()),
         )),
     }
 }

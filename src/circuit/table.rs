@@ -8,6 +8,7 @@ use halo2_proofs::{
 };
 use log::{debug, warn};
 use maybe_rayon::prelude::{IntoParallelIterator, ParallelIterator};
+use std::sync::{Arc, Mutex};
 
 use crate::{
     circuit::CircuitError,
@@ -16,6 +17,8 @@ use crate::{
 };
 
 use crate::circuit::lookup::LookupOp;
+
+pub static LOOKUP_RANGE: Mutex<Range> = Mutex::new((0, 0));
 
 /// The range of the lookup table.
 pub type Range = (i64, i64);
@@ -148,6 +151,8 @@ impl<F: PrimeField + TensorType + PartialOrd + std::hash::Hash + IntoI64> Table<
         let col_size = Self::cal_col_size(logrows, factors);
         // number of cols needed to store the range
         let num_cols = num_cols_required((range.1 - range.0).abs(), col_size);
+
+        *LOOKUP_RANGE.lock().unwrap() = range;
 
         debug!("table range: {:?}", range);
 

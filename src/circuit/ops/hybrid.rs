@@ -230,7 +230,9 @@ impl<F: PrimeField + TensorType + PartialOrd + std::hash::Hash + IntoI64> Op<F> 
             }
             HybridOp::Gather { dim, constant_idx } => {
                 if let Some(idx) = constant_idx {
-                    tensor::ops::gather(values[0].get_inner_tensor()?, idx, *dim)?.into()
+                    let res: ValTensor<F> =
+                        tensor::ops::gather(values[0].get_inner_tensor()?, idx, *dim)?.into();
+                    res
                 } else {
                     layouts::gather(config, region, values[..].try_into()?, *dim)?
                 }
