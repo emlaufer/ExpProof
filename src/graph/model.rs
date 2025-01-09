@@ -569,31 +569,24 @@ impl Model {
 
         use crate::circuit::utils::F32;
         let mut required_lookups: Vec<LookupOp> = res.lookup_ops.into_iter().collect();
-        required_lookups.push(crate::circuit::ops::lookup::LookupOp::RecipSqrt {
-            input_scale: F32(2f32.powf(8.0)),
-            output_scale: F32(2f32.powf(8.0)),
-        });
-        required_lookups.push(crate::circuit::ops::lookup::LookupOp::LimeWeight {
-            input_scale: F32(2f32.powf(8.0)),
-            sigma: Lime2Chip::kernel_width(d).into(),
-        });
-        required_lookups.push(crate::circuit::ops::lookup::LookupOp::Sqrt {
-            scale: F32(2f32.powf(8.0)),
-        });
-        required_lookups.push(crate::circuit::ops::lookup::LookupOp::Div {
-            denom: F32(2f32.powf(8.0)),
-        });
-        required_lookups.push(crate::circuit::ops::lookup::LookupOp::Abs);
+        let lime_circ = LimeCircuit::from_run_args(d, run_args);
+        lime_circ.add_lookups(&mut required_lookups);
+        //required_lookups.push(crate::circuit::ops::lookup::LookupOp::RecipSqrt {
+        //    input_scale: F32(2f32.powf(8.0)),
+        //    output_scale: F32(2f32.powf(8.0)),
+        //});
+        //required_lookups.push(crate::circuit::ops::lookup::LookupOp::LimeWeight {
+        //    input_scale: F32(2f32.powf(8.0)),
+        //    sigma: Lime2Chip::kernel_width(d).into(),
+        //});
         //required_lookups.push(crate::circuit::ops::lookup::LookupOp::Sqrt {
-        //    scale: F32(2f32.powf(16.0)),
+        //    scale: F32(2f32.powf(8.0)),
         //});
-        // TODO: configure these in a global spot...in lime2chip maybe
-        // CANNOT DO HERE...range is too big for this op...
-        //required_lookups.push(crate::circuit::ops::lookup::LookupOp::Norm {
-        //    scale: F32(8f32),
-        //    mean: F32(0f32),
-        //    std: F32(1f32),
+        //required_lookups.push(crate::circuit::ops::lookup::LookupOp::Div {
+        //    denom: F32(2f32.powf(8.0)),
         //});
+        //required_lookups.push(crate::circuit::ops::lookup::LookupOp::Abs);
+
         // range check for dividing off 2^8 precision later...
         let mut required_range_checks: Vec<Range> = res.range_checks.into_iter().collect();
         required_range_checks.push((-128, 128));

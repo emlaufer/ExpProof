@@ -292,6 +292,7 @@ pub enum LimeWeightStrategy {
     #[default]
     Exponential,
     Distance,
+    Uniform,
 }
 
 impl std::fmt::Display for LimeWeightStrategy {
@@ -299,6 +300,7 @@ impl std::fmt::Display for LimeWeightStrategy {
         match self {
             Self::Exponential => write!(f, "exponential"),
             Self::Distance => write!(f, "distance"),
+            Self::Uniform => write!(f, "uniform"),
         }
     }
 }

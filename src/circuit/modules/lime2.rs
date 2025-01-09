@@ -8,6 +8,7 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use super::errors::ModuleError;
+use crate::circuit::{lookup::LookupOp, BaseConfig as PolyConfig, CheckMode, Op};
 use crate::graph::errors::GraphError;
 use crate::graph::lime::LassoModel;
 use crate::graph::GraphSettings;
@@ -24,7 +25,7 @@ use super::perturb::PerturbChip;
 use super::sample::SampleChip;
 use crate::circuit::ops::chip::BaseConfig;
 use crate::circuit::ops::region::RegionCtx;
-use crate::{LimeWeightStrategy, VectorInputMode};
+use crate::LimeWeightStrategy;
 
 use crate::graph::utilities::{dequantize, quantize_float};
 // helper to assign tensors to column of cells
@@ -304,7 +305,6 @@ trait LimeInputCircuit:
         classify: &dyn Fn(Tensor<Fp>) -> Result<Tensor<Fp>, GraphError>,
         perturb: &dyn Fn(Tensor<Fp>) -> Tensor<Fp>,
         x: &Tensor<Fp>,
-        samples: &[Fp],
         input_scale: Scale,
         output_scale: Scale,
     ) -> Tensor<Fp>;
@@ -339,16 +339,6 @@ trait LimeInputCircuit:
         inputs: &ValTensor<Fp>,
         labels: &ValTensor<Fp>,
     ) -> ValTensor<Fp>;
-
-    fn layout_surrogate(
-        &self,
-        config: &LimeConfig,
-        base_config: &BaseConfig<Fp>,
-        region: &mut RegionCtx<Fp>,
-        x_label: &ValTensor<Fp>,
-        inputs: &ValTensor<Fp>,
-        labels: &ValTensor<Fp>,
-    ) -> ValTensor<Fp>;
 }
 
 dyn_clone::clone_trait_object!(LimeInputCircuit);
@@ -372,7 +362,6 @@ impl LimeInputCircuit for PlainInputCircuit {
         classify: &dyn Fn(Tensor<Fp>) -> Result<Tensor<Fp>, GraphError>,
         perturb: &dyn Fn(Tensor<Fp>) -> Tensor<Fp>,
         x: &Tensor<Fp>,
-        samples: &[Fp],
         input_scale: Scale,
         output_scale: Scale,
     ) -> Tensor<Fp> {
@@ -418,18 +407,6 @@ impl LimeInputCircuit for PlainInputCircuit {
     ) -> ValTensor<Fp> {
         ValTensor::known_from_vec(&vec![])
     }
-
-    fn layout_surrogate(
-        &self,
-        config: &LimeConfig,
-        base_config: &BaseConfig<Fp>,
-        region: &mut RegionCtx<Fp>,
-        x_label: &ValTensor<Fp>,
-        inputs: &ValTensor<Fp>,
-        labels: &ValTensor<Fp>,
-    ) -> ValTensor<Fp> {
-        ValTensor::known_from_vec(&vec![])
-    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -439,120 +416,6 @@ pub struct VectorInputCircuit {
     m: usize, // number of vectors
     step: f64,
     d: usize,
-
-    mode: VectorInputMode,
-}
-
-impl VectorInputCircuit {
-    fn find_enemy(
-        &self,
-        classify: &dyn Fn(Tensor<Fp>) -> Result<Tensor<Fp>, GraphError>,
-        perturb: &dyn Fn(Tensor<Fp>) -> Tensor<Fp>,
-        samples: &[Fp],
-        x: &Tensor<Fp>,
-        input_scale: Scale,
-        output_scale: Scale,
-    ) -> usize {
-        let mut inputs = self.generate_model_input(x, samples);
-        println!("inputs: {:?}", inputs);
-        let mut inputs = inputs.pad_rows(self.num_points() + 1, Fp::zero()).unwrap();
-        inputs
-            .set_slice(&[self.num_points()..self.num_points() + 1, 0..self.d], x)
-            .unwrap();
-
-        let labels = classify(inputs).unwrap();
-        println!("labels: {:?}", labels);
-
-        let x_label = labels[self.num_points()];
-
-        for i in 1..self.num_points() + 1 {
-            if labels[i - 1] != x_label {
-                println!("OP LABEL: {:?}", i);
-                // TODO: Why 10*step?
-                return i;
-            }
-        }
-
-        return self.num_points() + 1;
-    }
-
-    // layout checks for std
-    fn layout_enemy(
-        &self,
-        config: &LimeConfig,
-        base_config: &BaseConfig<Fp>,
-        region: &mut RegionCtx<Fp>,
-        x_label: &ValTensor<Fp>,
-        inputs: &ValTensor<Fp>,
-        labels: &ValTensor<Fp>,
-    ) -> ValTensor<Fp> {
-        let mut x_label = x_label.clone();
-        x_label.expand(&[labels.len()]).unwrap();
-
-        println!("inputs: {:?}", inputs);
-        println!("labels: {:?}", labels);
-        let opposite_labels =
-            pairwise(base_config, region, &[labels.clone(), x_label], BaseOp::Sub).unwrap();
-        let opposite_labels = crate::circuit::ops::layouts::nonlinearity(
-            base_config,
-            region,
-            &[opposite_labels.clone()],
-            &crate::circuit::ops::lookup::LookupOp::Abs,
-        )
-        .unwrap();
-
-        let one = create_constant_tensor(Fp::one(), labels.len());
-        let same_labels = pairwise(
-            base_config,
-            region,
-            &[one.clone(), opposite_labels.clone()],
-            BaseOp::Sub,
-        )
-        .unwrap();
-
-        let step: Fp = i64_to_felt(quantize_float(&(10.0 * self.step), 0.0, 8).unwrap());
-        let all_stds: ValTensor<Fp> = (0..self.num_points())
-            .map(|i| ValType::Constant(Fp::from(((i / 3) + 1) as u64) * step))
-            .collect::<Vec<_>>()
-            .into();
-        println!("opp-labels: {:?}", opposite_labels);
-        println!("all stds: {:?}", all_stds);
-        let opposite_stds = pairwise(
-            base_config,
-            region,
-            &[opposite_labels.clone(), all_stds],
-            BaseOp::Mult,
-        )
-        .unwrap();
-        println!("opp-stds: {:?}", opposite_stds);
-        let max = create_constant_tensor(Fp::from(self.num_points() as u64) * step, labels.len());
-        let same_stds = pairwise(
-            base_config,
-            region,
-            &[same_labels.clone(), max],
-            BaseOp::Mult,
-        )
-        .unwrap();
-
-        let stds = pairwise(
-            base_config,
-            region,
-            &[opposite_stds.clone(), same_stds],
-            BaseOp::Add,
-        )
-        .unwrap();
-        println!("stds: {:?}", stds);
-
-        let res = match self.mode {
-            VectorInputMode::Std => min(base_config, region, &[stds]).unwrap(),
-            VectorInputMode::Surrogate => {
-                let m = argmin(base_config, region, &[stds]).unwrap();
-                gather(base_config, region, &[inputs.clone(), m.clone()], 0).unwrap()
-            }
-        };
-        println!("min_std: {:?}", res);
-        res.clone()
-    }
 }
 
 impl LimeInputCircuit for VectorInputCircuit {
@@ -569,18 +432,10 @@ impl LimeInputCircuit for VectorInputCircuit {
         classify: &dyn Fn(Tensor<Fp>) -> Result<Tensor<Fp>, GraphError>,
         perturb: &dyn Fn(Tensor<Fp>) -> Tensor<Fp>,
         x: &Tensor<Fp>,
-        samples: &[Fp],
         input_scale: Scale,
         output_scale: Scale,
     ) -> Tensor<Fp> {
-        match self.mode {
-            VectorInputMode::Std => x.clone(),
-            VectorInputMode::Surrogate => {
-                let mut inputs = self.generate_model_input(x, samples);
-                let i = self.find_enemy(classify, perturb, samples, x, input_scale, output_scale);
-                return inputs.get_slice(&[i..i + 1, 0..self.d]).unwrap();
-            }
-        }
+        x.clone()
     }
 
     fn find_std(
@@ -592,14 +447,30 @@ impl LimeInputCircuit for VectorInputCircuit {
         input_scale: Scale,
         output_scale: Scale,
     ) -> Fp {
-        match self.mode {
-            VectorInputMode::Std => {
-                let i = self.find_enemy(classify, perturb, samples, x, input_scale, output_scale);
-                (Fp::from((i as u64) % self.m as u64)
-                    * i64_to_felt::<Fp>(quantize_float(&(10.0 * self.step), 0.0, 8).unwrap()))
+        let mut inputs = self.generate_model_input(x, samples);
+        println!("inputs: {:?}", inputs);
+        let mut inputs = inputs.pad_rows(self.num_points() + 1, Fp::zero()).unwrap();
+        inputs
+            .set_slice(&[self.num_points()..self.num_points() + 1, 0..self.d], x)
+            .unwrap();
+
+        let labels = classify(inputs).unwrap();
+        println!("labels: {:?}", labels);
+
+        let x_label = labels[self.num_points()];
+
+        for i in 1..self.num_points() + 1 {
+            if labels[i - 1] != x_label {
+                println!("OP LABEL: {:?}", i);
+                // TODO: Why 10*step?
+                return (Fp::from(i as u64)
+                    * i64_to_felt::<Fp>(quantize_float(&(10.0 * self.step), 0.0, 8).unwrap()));
             }
-            VectorInputMode::Surrogate => i64_to_felt(quantize_float(&1.0, 0.0, 8).unwrap()),
         }
+
+        let res = (Fp::from((self.num_points() + 1) as u64)
+            * i64_to_felt::<Fp>(quantize_float(&(10.0 * self.step), 0.0, 8).unwrap()));
+        return res;
     }
 
     // Empty
@@ -752,23 +623,6 @@ impl LimeInputCircuit for VectorInputCircuit {
         result
     }
 
-    fn layout_surrogate(
-        &self,
-        config: &LimeConfig,
-        base_config: &BaseConfig<Fp>,
-        region: &mut RegionCtx<Fp>,
-        x_label: &ValTensor<Fp>,
-        inputs: &ValTensor<Fp>,
-        labels: &ValTensor<Fp>,
-    ) -> ValTensor<Fp> {
-        match self.mode {
-            VectorInputMode::Std => ValTensor::known_from_vec(&vec![]),
-            VectorInputMode::Surrogate => {
-                self.layout_enemy(config, base_config, region, x_label, inputs, labels)
-            }
-        }
-    }
-
     // layout checks for std
     fn layout_std(
         &self,
@@ -779,12 +633,71 @@ impl LimeInputCircuit for VectorInputCircuit {
         inputs: &ValTensor<Fp>,
         labels: &ValTensor<Fp>,
     ) -> ValTensor<Fp> {
-        match self.mode {
-            VectorInputMode::Std => {
-                self.layout_enemy(config, base_config, region, x_label, inputs, labels)
-            }
-            VectorInputMode::Surrogate => ValTensor::known_from_vec(&vec![]),
-        }
+        // get the first std_dev...
+
+        // std_dev should be the first point that is enemy...
+
+        let mut x_label = x_label.clone();
+        x_label.expand(&[labels.len()]).unwrap();
+
+        println!("inputs: {:?}", inputs);
+        println!("labels: {:?}", labels);
+        let opposite_labels =
+            pairwise(base_config, region, &[labels.clone(), x_label], BaseOp::Sub).unwrap();
+        let opposite_labels = crate::circuit::ops::layouts::nonlinearity(
+            base_config,
+            region,
+            &[opposite_labels.clone()],
+            &crate::circuit::ops::lookup::LookupOp::Abs,
+        )
+        .unwrap();
+
+        let one = create_constant_tensor(Fp::one(), labels.len());
+        let same_labels = pairwise(
+            base_config,
+            region,
+            &[one.clone(), opposite_labels.clone()],
+            BaseOp::Sub,
+        )
+        .unwrap();
+
+        let step: Fp = i64_to_felt(quantize_float(&(10.0 * self.step), 0.0, 8).unwrap());
+        let all_stds: ValTensor<Fp> = (0..self.num_points())
+            .map(|i| ValType::Constant(Fp::from(((i / 3) + 1) as u64) * step))
+            .collect::<Vec<_>>()
+            .into();
+        println!("opp-labels: {:?}", opposite_labels);
+        println!("all stds: {:?}", all_stds);
+        let opposite_stds = pairwise(
+            base_config,
+            region,
+            &[opposite_labels.clone(), all_stds],
+            BaseOp::Mult,
+        )
+        .unwrap();
+        println!("opp-stds: {:?}", opposite_stds);
+        let max = create_constant_tensor(Fp::from(self.num_points() as u64) * step, labels.len());
+        let same_stds = pairwise(
+            base_config,
+            region,
+            &[same_labels.clone(), max],
+            BaseOp::Mult,
+        )
+        .unwrap();
+
+        let stds = pairwise(
+            base_config,
+            region,
+            &[opposite_stds.clone(), same_stds],
+            BaseOp::Add,
+        )
+        .unwrap();
+        println!("stds: {:?}", stds);
+
+        let min_std = min(base_config, region, &[stds]).unwrap();
+        println!("min_std: {:?}", min_std);
+
+        min_std.clone()
     }
 }
 
@@ -1001,6 +914,21 @@ impl LimeCircuit {
         }
     }
 
+    pub fn from_run_args(d: usize, run_args: &RunArgs) -> Self {
+        let input_circuit = Self::new_input_circuit(run_args, d);
+        let num_points = run_args.generate_explanation.unwrap();
+        let sample_circuit = Self::new_sampling_circuit(run_args, d);
+        let weight_strategy = run_args.lime_weight_strategy.clone().unwrap();
+
+        Self {
+            input_circuit,
+            sample_circuit,
+            num_points,
+            weight_strategy,
+            d,
+        }
+    }
+
     fn new_input_circuit(run_args: &RunArgs, d: usize) -> Box<dyn LimeInputCircuit> {
         match run_args.surrogate_strategy {
             Some(SurrogateStrategy::Plain) => Box::new(PlainInputCircuit { d }),
@@ -1009,7 +937,6 @@ impl LimeCircuit {
                 n: run_args.surrogate_n.unwrap(),
                 m: run_args.surrogate_m.unwrap(),
                 step: run_args.surrogate_step.unwrap(),
-                mode: run_args.vector_input_mode.clone().unwrap(),
             }),
             Some(SurrogateStrategy::Spheres) => unimplemented!(),
             None => Box::new(PlainInputCircuit { d }),
@@ -1048,6 +975,26 @@ impl LimeCircuit {
             weight_strategy,
             d,
         }
+    }
+
+    pub fn add_lookups(&self, required_lookups: &mut Vec<LookupOp>) {
+        if !matches!(self.weight_strategy, LimeWeightStrategy::Uniform) {
+            required_lookups.push(crate::circuit::ops::lookup::LookupOp::RecipSqrt {
+                input_scale: F32(2f32.powf(8.0)),
+                output_scale: F32(2f32.powf(8.0)),
+            });
+            required_lookups.push(crate::circuit::ops::lookup::LookupOp::LimeWeight {
+                input_scale: F32(2f32.powf(8.0)),
+                sigma: Lime2Chip::kernel_width(self.d).into(),
+            });
+            required_lookups.push(crate::circuit::ops::lookup::LookupOp::Sqrt {
+                scale: F32(2f32.powf(8.0)),
+            });
+        }
+        required_lookups.push(crate::circuit::ops::lookup::LookupOp::Div {
+            denom: F32(2f32.powf(8.0)),
+        });
+        required_lookups.push(crate::circuit::ops::lookup::LookupOp::Abs);
     }
 
     fn create_config(&self, meta: &mut ConstraintSystem<Fp>) -> LimeConfig {
@@ -1212,9 +1159,9 @@ impl LimeCircuit {
 
             // add surrogate point to inputs...
             // TODO: fix constants
-            let surrogate =
-                self.input_circuit
-                    .find_surrogate(&classify, &perturb, &input, input_samples, 8, 0);
+            let surrogate = self
+                .input_circuit
+                .find_surrogate(&classify, &perturb, &input, 8, 0);
             let input_points = self
                 .input_circuit
                 .generate_model_input(&input, input_samples);
@@ -1454,6 +1401,8 @@ impl LimeCircuit {
             LimeWeightStrategy::Distance => {
                 self.layout_dist_weights(config, region, x_border, inputs)
             }
+            // handled outside TODO(Evan): make this more uniform...
+            LimeWeightStrategy::Uniform => unimplemented!(),
         }
     }
 
@@ -1483,43 +1432,48 @@ impl LimeCircuit {
         let inputs = inputs.get_slice(&[1..self.num_points + 1, 0..d]).unwrap();
         let outputs = outputs.get_slice(&[1..self.num_points + 1]).unwrap();
 
-        let weights = self.layout_lime_weights(config, region, x_border, &inputs);
+        let (inputs, outputs) = if !matches!(self.weight_strategy, LimeWeightStrategy::Uniform) {
+            println!("HI THERE");
+            let weights = self.layout_lime_weights(config, region, x_border, &inputs);
 
-        // sqrt weights
-        let mut sqrt_weights = crate::circuit::ops::layouts::nonlinearity(
-            config,
-            region,
-            &[weights],
-            &crate::circuit::ops::lookup::LookupOp::Sqrt {
-                scale: F32(2f32.powf(8.0)),
-            },
-        )
-        .unwrap();
-        //println!("SQRT WEIGHTS: {:?}", sqrt_weights.show());
+            // sqrt weights
+            let mut sqrt_weights = crate::circuit::ops::layouts::nonlinearity(
+                config,
+                region,
+                &[weights],
+                &crate::circuit::ops::lookup::LookupOp::Sqrt {
+                    scale: F32(2f32.powf(8.0)),
+                },
+            )
+            .unwrap();
+            //println!("SQRT WEIGHTS: {:?}", sqrt_weights.show());
 
-        // multiply inputs and outputs by sqrt weights
-        // see: https://github.com/marcotcr/lime/blob/fd7eb2e6f760619c29fca0187c07b82157601b32/lime/lime_base.py#L116
-        let mut input_sqrt_weights = sqrt_weights.clone();
-        input_sqrt_weights.expand(&[self.num_points, d]);
-        let inputs = pairwise(
-            config,
-            region,
-            &[input_sqrt_weights.clone(), inputs],
-            BaseOp::Mult,
-        )
-        .unwrap();
-        //println!("GOT INPUTS: {:?}", inputs.pshow(16));
+            // multiply inputs and outputs by sqrt weights
+            // see: https://github.com/marcotcr/lime/blob/fd7eb2e6f760619c29fca0187c07b82157601b32/lime/lime_base.py#L116
+            let mut input_sqrt_weights = sqrt_weights.clone();
+            input_sqrt_weights.expand(&[self.num_points, d]);
+            let inputs = pairwise(
+                config,
+                region,
+                &[input_sqrt_weights.clone(), inputs],
+                BaseOp::Mult,
+            )
+            .unwrap();
+            //println!("GOT INPUTS: {:?}", inputs.pshow(16));
 
-        let mut output_sqrt_weights = sqrt_weights.clone();
-        output_sqrt_weights.expand(&[self.num_points]);
-        let outputs = pairwise(
-            config,
-            region,
-            &[output_sqrt_weights.clone(), outputs],
-            BaseOp::Mult,
-        )
-        .unwrap();
-        //println!("GOT OUTPUTS: {:?}", outputs.pshow(8));
+            let mut output_sqrt_weights = sqrt_weights.clone();
+            output_sqrt_weights.expand(&[self.num_points]);
+            let outputs = pairwise(
+                config,
+                region,
+                &[output_sqrt_weights.clone(), outputs],
+                BaseOp::Mult,
+            )
+            .unwrap();
+            (inputs, outputs)
+        } else {
+            (inputs, outputs)
+        };
 
         // residuals part
         let deltas = einsum(
@@ -1855,7 +1809,6 @@ impl Lime2Chip {
     //        n_lime + 1
     //    }
     //}
-
     pub fn sample_size(n_lime: usize, n_input: usize, d: usize) -> usize {
         n_lime * d + n_input
     }
