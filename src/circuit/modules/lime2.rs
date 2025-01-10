@@ -169,13 +169,23 @@ impl LimePointSampler for GaussianPointSampleCircuit {
         let samples_normal = samples_normal
             .enum_map::<_, Fp, ModuleError>(|_, v| Ok(i64_to_felt(v)))
             .unwrap();
+        let perts = samples_normal
+            .enum_map::<_, Fp, ModuleError>(|_, v| {
+                let value = (v - Fp::from(128));
+
+                // convert back to float to rescale down to 8 bits...
+                //let rescaled = dequantize(value, 16, 0.0);
+                //println!("rescaled: {:?}", rescaled);
+                //Ok(i64_to_felt::<Fp>(quantize_float(&value, 0.0, 8).unwrap()))
+                Ok(value)
+            })
+            .unwrap();
         let samples_normal = samples_normal
             .enum_map::<_, Fp, ModuleError>(|_, v| {
                 let value = (v - Fp::from(128)) * std;
 
                 // convert back to float to rescale down to 8 bits...
                 let rescaled = dequantize(value, 16, 0.0);
-                println!("rescaled: {:?}", rescaled);
                 Ok(i64_to_felt::<Fp>(
                     quantize_float(&rescaled, 0.0, 8).unwrap(),
                 ))
@@ -214,7 +224,7 @@ impl LimePointSampler for GaussianPointSampleCircuit {
         let perturbations = pairwise(
             base_config,
             region,
-            &[samples.clone(), half_sample],
+            &[normal_samples.clone(), half_sample],
             BaseOp::Sub,
         )
         .unwrap();
