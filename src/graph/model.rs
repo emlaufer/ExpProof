@@ -589,11 +589,7 @@ impl Model {
 
         // range check for dividing off 2^8 precision later...
         let mut required_range_checks: Vec<Range> = res.range_checks.into_iter().collect();
-        required_range_checks.push((-128, 128));
-        let dual_gap_tolerance = (0.1 * 3.0 * 2f64.powf(8.0)) as i64;
-        required_range_checks.push((-dual_gap_tolerance, dual_gap_tolerance));
-        let dual_feasible_tolerance = ((0.01 * 3.0) * 2f64.powf(16.0)).ceil() as i64;
-        required_range_checks.push((-dual_feasible_tolerance, dual_feasible_tolerance));
+        lime_circ.add_range_checks(&mut required_range_checks);
 
         // if we're using percentage tolerance, we need to add the necessary range check ops for it.
         Ok(GraphSettings {

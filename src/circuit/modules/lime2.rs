@@ -17,6 +17,7 @@ use crate::tensor::{Tensor, TensorType, ValTensor, ValType};
 use crate::{SamplingStrategy, Scale, SurrogateStrategy};
 
 use crate::circuit::ops::layouts::*;
+use crate::circuit::table::Range;
 use crate::circuit::utils::F32;
 use crate::circuit::{ops::base::BaseOp, utils};
 use crate::fieldutils::{felt_to_i64, i64_to_felt};
@@ -33,6 +34,7 @@ use crate::graph::utilities::{dequantize, quantize_float};
 trait LimePointSampler:
     std::fmt::Debug + serde_traitobject::Serialize + serde_traitobject::Deserialize + DynClone
 {
+    fn add_lookups(&self, required_lookups: &mut Vec<LookupOp>);
     fn num_samples(&self) -> usize;
     fn num_points(&self) -> usize;
     fn generate_witness(&self, samples: &[Fp], std: Fp) -> Vec<Fp>;
@@ -60,6 +62,8 @@ impl UniformPointSampleCircuit {
 }
 
 impl LimePointSampler for UniformPointSampleCircuit {
+    fn add_lookups(&self, required_lookups: &mut Vec<LookupOp>) {}
+
     fn num_samples(&self) -> usize {
         self.num_points * self.d
     }
@@ -130,7 +134,21 @@ struct GaussianPointSampleCircuit {
     d: usize,
 }
 
+impl GaussianPointSampleCircuit {
+    fn new(num_points: usize, d: usize) -> Self {
+        Self { num_points, d }
+    }
+}
+
 impl LimePointSampler for GaussianPointSampleCircuit {
+    fn add_lookups(&self, required_lookups: &mut Vec<LookupOp>) {
+        required_lookups.push(crate::circuit::ops::lookup::LookupOp::Norm {
+            scale: F32(2f32.powf(8.0)),
+            mean: F32(0f32),
+            std: F32(1f32),
+        });
+    }
+
     fn num_samples(&self) -> usize {
         self.num_points * self.d
     }
@@ -949,7 +967,7 @@ impl LimeCircuit {
                 run_args.generate_explanation.unwrap(),
                 d,
             )),
-            Some(SamplingStrategy::Gaussian) => Box::new(UniformPointSampleCircuit::new(
+            Some(SamplingStrategy::Gaussian) => Box::new(GaussianPointSampleCircuit::new(
                 run_args.generate_explanation.unwrap(),
                 d,
             )),
@@ -995,6 +1013,15 @@ impl LimeCircuit {
             denom: F32(2f32.powf(8.0)),
         });
         required_lookups.push(crate::circuit::ops::lookup::LookupOp::Abs);
+        self.sample_circuit.add_lookups(required_lookups);
+    }
+
+    pub fn add_range_checks(&self, required_range_checks: &mut Vec<Range>) {
+        required_range_checks.push((-128, 128));
+        let dual_gap_tolerance = (0.1 * 3.0 * 2f64.powf(8.0)) as i64;
+        required_range_checks.push((-dual_gap_tolerance, dual_gap_tolerance));
+        let dual_feasible_tolerance = ((0.01 * 3.0) * 2f64.powf(16.0)).ceil() as i64;
+        required_range_checks.push((-dual_feasible_tolerance, dual_feasible_tolerance));
     }
 
     fn create_config(&self, meta: &mut ConstraintSystem<Fp>) -> LimeConfig {
