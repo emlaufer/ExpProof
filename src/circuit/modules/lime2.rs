@@ -1736,6 +1736,7 @@ impl LimeCircuit {
         // check dual is feasible
         let mut dual_feasible =
             einsum(config, region, &[inputs.clone(), dual.clone()], "ji,j->i").unwrap();
+        println!("dual feasible: {:?}", dual_feasible.pshow(8));
         for i in 0..2 {
             dual_feasible = crate::circuit::ops::layouts::loop_div(
                 config,
