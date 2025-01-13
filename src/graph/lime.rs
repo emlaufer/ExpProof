@@ -286,18 +286,16 @@ impl<F: TensorType + PrimeField + PartialOrd + IntoI64> LassoModel<F> {
 
             // TODO: other dual alg?
             //println!("DUAL1: {:?}", dual);
-            //let test = inputs_linfa.t().dot(&inputs_linfa);
-            //let test2 = test.dot(model.hyperplane());
-            //let mut ss = (0..test.shape()[0])
-            //    .map(|i| {
-            //        0.01 / (2.0 * (test2[i] - 2.0 * (outputs_linfa[i] - model.intercept())).abs())
-            //    })
-            //    .fold(f64::INFINITY, |a, b| a.min(b));
-            //if ss == f64::INFINITY {
-            //    ss = 0.0;
-            //}
-            //2.0 * ss * (inputs_linfa.dot(model.hyperplane()) - (outputs_linfa - model.intercept()))
-            dual
+            let test = inputs_linfa.t().dot(&inputs_linfa);
+            let test2 = test.dot(model.hyperplane());
+            let mut ss = (0..test.shape()[0])
+                .map(|i| 0.01 / (2.0 * (test2[i] - 2.0 * (outputs_linfa[i])).abs()))
+                .fold(f64::INFINITY, |a, b| a.min(b));
+            if ss == f64::INFINITY {
+                ss = 0.0;
+            }
+            2.0 * ss * (inputs_linfa.dot(model.hyperplane()) - (outputs_linfa))
+            //dual
         };
 
         let hyperplane = model.hyperplane().to_vec();
