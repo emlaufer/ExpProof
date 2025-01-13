@@ -1736,7 +1736,6 @@ impl LimeCircuit {
         // check dual is feasible
         let mut dual_feasible =
             einsum(config, region, &[inputs.clone(), dual.clone()], "ji,j->i").unwrap();
-        //println!("dual feasible: {:?}", dual_feasible.pshow(32));
         for i in 0..2 {
             dual_feasible = crate::circuit::ops::layouts::loop_div(
                 config,
@@ -1746,7 +1745,6 @@ impl LimeCircuit {
             )
             .unwrap();
         }
-        println!("dual feasible: {:?}", dual_feasible.pshow(16));
         // add some slack due to quantization error...
         let range_check_bracket = ((0.01 * 3.0) * 2f64.powf(16.0)).ceil() as i64;
         let range_check_felt: Fp = i64_to_felt(range_check_bracket);

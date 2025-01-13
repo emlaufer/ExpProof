@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 
 use linfa::prelude::*;
 use linfa_elasticnet::ElasticNet;
-use ndarray::Array;
+use ndarray::{s, Array};
 use num::abs;
 
 // todo: maybe add some checks, ensure that original input not
@@ -271,20 +271,40 @@ impl<F: TensorType + PrimeField + PartialOrd + IntoI64> LassoModel<F> {
         let model = ElasticNet::params()
             .penalty(0.01)
             .l1_ratio(1.0)
+            .max_iterations(10000)
+            .tolerance(1e-8)
             .fit(&data)
             .unwrap();
 
-        //println!("LASSO model: {:?}", model);
+        // TODO: wackyness...
+        let dual = if model.hyperplane().iter().all(|x| *x == 0.0) {
+            inputs_linfa.dot(model.hyperplane())
+        } else {
+            let dual: Array<f64, _> =
+                (outputs_linfa.clone() - model.intercept() - inputs_linfa.dot(model.hyperplane()))
+                    / (inputs.dims()[0] as f64);
 
-        let dual: Array<f64, _> =
-            (outputs_linfa - model.intercept() - inputs_linfa.dot(model.hyperplane()))
-                / (inputs.dims()[0] as f64);
+            // TODO: other dual alg?
+            //println!("DUAL1: {:?}", dual);
+            //let test = inputs_linfa.t().dot(&inputs_linfa);
+            //let test2 = test.dot(model.hyperplane());
+            //let mut ss = (0..test.shape()[0])
+            //    .map(|i| {
+            //        0.01 / (2.0 * (test2[i] - 2.0 * (outputs_linfa[i] - model.intercept())).abs())
+            //    })
+            //    .fold(f64::INFINITY, |a, b| a.min(b));
+            //if ss == f64::INFINITY {
+            //    ss = 0.0;
+            //}
+            //2.0 * ss * (inputs_linfa.dot(model.hyperplane()) - (outputs_linfa - model.intercept()))
+            dual
+        };
 
         let hyperplane = model.hyperplane().to_vec();
         let dual: Vec<f64> = dual.to_vec();
-        //println!("hyperplane: {:?}", hyperplane);
-        //println!("intercept: {:?}", model.intercept());
-        //println!("dual: {:?}", dual);
+        println!("hyperplane: {:?}", hyperplane);
+        println!("intercept: {:?}", model.intercept());
+        println!("dual: {:?}", dual);
 
         // TODO(EVAN): could there be issues with rounding? No right?
         let mut top_k = hyperplane.clone();
@@ -343,6 +363,9 @@ impl<F: TensorType + PrimeField + PartialOrd + IntoI64> LassoModel<F> {
         //    "topk int: {:?}",
         //    top_k.iter().map(|v| felt_to_i64(*v)).collect::<Vec<_>>()
         //);
+        println!("coeffs: {:?}", coeffs);
+        println!("intercept: {:?}", model.intercept());
+        println!("dual: {:?}", dual);
 
         (coeffs, top_k, top_k_idx, intercept, dual)
     }
