@@ -324,6 +324,8 @@ pub struct SpheresInputPicker {}
 trait LimeInputCircuit:
     std::fmt::Debug + serde_traitobject::Serialize + serde_traitobject::Deserialize + DynClone
 {
+    fn add_lookups(&self, required_lookups: &mut Vec<LookupOp>);
+
     fn num_samples(&self) -> usize;
 
     fn num_points(&self) -> usize;
@@ -377,6 +379,8 @@ pub struct PlainInputCircuit {
 }
 
 impl LimeInputCircuit for PlainInputCircuit {
+    fn add_lookups(&self, required_lookups: &mut Vec<LookupOp>) {}
+
     fn num_samples(&self) -> usize {
         0
     }
@@ -447,6 +451,13 @@ pub struct VectorInputCircuit {
 }
 
 impl LimeInputCircuit for VectorInputCircuit {
+    fn add_lookups(&self, required_lookups: &mut Vec<LookupOp>) {
+        required_lookups.push(crate::circuit::ops::lookup::LookupOp::RecipSqrt {
+            input_scale: F32(2f32.powf(8.0)),
+            output_scale: F32(2f32.powf(8.0)),
+        });
+    }
+
     fn num_samples(&self) -> usize {
         self.m * self.d
     }
@@ -921,6 +932,7 @@ use crate::graph::model::Model;
 use crate::RunArgs;
 impl LimeCircuit {
     const LIME_MULTIPLIER: u64 = 4;
+    const DUAL_GAP_TOLERANCE: f64 = 1.0;
 
     pub fn new(model: &Model, run_args: &RunArgs) -> Self {
         let d = model
@@ -1024,11 +1036,12 @@ impl LimeCircuit {
         });
         required_lookups.push(crate::circuit::ops::lookup::LookupOp::Abs);
         self.sample_circuit.add_lookups(required_lookups);
+        self.input_circuit.add_lookups(required_lookups);
     }
 
     pub fn add_range_checks(&self, required_range_checks: &mut Vec<Range>) {
         required_range_checks.push((-128, 128));
-        let dual_gap_tolerance = (0.1 * 3.0 * 2f64.powf(8.0)) as i64;
+        let dual_gap_tolerance = (Self::DUAL_GAP_TOLERANCE * 2f64.powf(8.0)) as i64;
         required_range_checks.push((-dual_gap_tolerance, dual_gap_tolerance));
         let dual_feasible_tolerance = ((0.01 * 3.0) * 2f64.powf(16.0)).ceil() as i64;
         required_range_checks.push((-dual_feasible_tolerance, dual_feasible_tolerance));
@@ -1469,6 +1482,9 @@ impl LimeCircuit {
         let inputs = inputs.get_slice(&[1..self.num_points + 1, 0..d]).unwrap();
         let outputs = outputs.get_slice(&[1..self.num_points + 1]).unwrap();
 
+        println!("LIME MODEL: {:?}", lime_model.pshow(8));
+        println!("LIME DUAL: {:?}", dual.pshow(8));
+
         let (inputs, outputs) = if !matches!(self.weight_strategy, LimeWeightStrategy::Uniform) {
             println!("HI THERE");
             let weights = self.layout_lime_weights(config, region, x_border, &inputs);
@@ -1724,7 +1740,7 @@ impl LimeCircuit {
         // HUGE TODO(EVAN): ensure dual is feasible.........
 
         // ensure within 0.1?
-        let range_check_bracket = (0.1 * 3.0 * 2f64.powf(8.0)) as i64;
+        let range_check_bracket = (Self::DUAL_GAP_TOLERANCE * 2f64.powf(8.0)) as i64;
         range_check(
             config,
             region,
