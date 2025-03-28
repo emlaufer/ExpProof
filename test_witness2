@@ -1,0 +1,11 @@
+[*] [2025-03-27 20:04:28, ezkl] - command: 
+ |   {
+ |    "GenWitness": {
+ |      "compiled_circuit": "model.compiled",
+ |      "data": "input.json",
+ |      "output": "witness.json",
+ |      "srs_path": null,
+ |      "vk_path": null
+ |    }
+ |  }
+[E] [2025-03-27 20:04:28, ezkl] - [graph] [io] (model.compiled) No such file or directory (os error 2)

@@ -3053,6 +3053,8 @@ dependencies = [
 [[package]]
 name = "linfa-elasticnet"
 version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3daf1027356c9bb8fdb8e9d04bd042c0051af6d285ff3242fe86ae68055498e4"
 dependencies = [
  "approx 0.4.0",
  "linfa",
