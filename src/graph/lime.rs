@@ -1,7 +1,7 @@
 use super::utilities::{dequantize, quantize_float};
-use crate::circuit::modules::lime2::Lime2Chip;
 use crate::fieldutils::{felt_to_i64, i64_to_felt};
 use crate::graph::errors::GraphError;
+use crate::graph::LimeCircuit;
 use crate::tensor::ops::*;
 use crate::tensor::{
     ops::accumulated::{dot, prod},
@@ -10,6 +10,7 @@ use crate::tensor::{
 };
 use crate::Scale;
 
+use crate::LimeWeightStrategy;
 use std::cmp::PartialOrd;
 use std::ops::{Add, Mul, Range};
 
@@ -22,7 +23,11 @@ use serde::{Deserialize, Serialize};
 
 use linfa::prelude::*;
 use linfa_elasticnet::ElasticNet;
-use ndarray::{s, Array};
+use linfa_linalg::norm::Norm;
+use ndarray::{
+    s, Array, Array1, Array2, ArrayBase, ArrayView, ArrayView1, ArrayView2, Axis, CowArray, Data,
+    Dimension, Ix2, RemoveAxis,
+};
 use num::abs;
 
 // todo: maybe add some checks, ensure that original input not
@@ -146,10 +151,6 @@ impl<F: TensorType + PrimeField + PartialOrd + IntoI64> LassoModel<F> {
         G: Fn(Tensor<F>) -> Result<Tensor<F>, GraphError>,
         H: Fn(Tensor<F>) -> Tensor<F>,
     {
-        if (!crate::USE_SURROGATE) {
-            return None;
-        }
-
         let classify_wrapper = |x: Tensor<f64>| {
             // quantize x
             let x = x.quantize(input_scale).unwrap();
@@ -185,7 +186,11 @@ impl<F: TensorType + PrimeField + PartialOrd + IntoI64> LassoModel<F> {
         return Some(local_surrogate);
     }
 
-    fn compute_weights(x_border: &Tensor<F>, inputs: &Tensor<F>) -> Tensor<F> {
+    fn compute_weights(
+        x_border: &Tensor<F>,
+        inputs: &Tensor<F>,
+        weight_strat: LimeWeightStrategy,
+    ) -> Tensor<F> {
         let d = x_border.dims()[1];
         let n = inputs.dims()[0];
 
@@ -219,11 +224,14 @@ impl<F: TensorType + PrimeField + PartialOrd + IntoI64> LassoModel<F> {
         //println!("SQUARE DIST: {:?}", square_distance);
         //println!("SQUARE DIST SCALED: {:?}", square_distance);
 
-        let weights = crate::tensor::ops::nonlinearities::lime_weight(
-            &square_distance,
-            2f64.powf(8.0).into(),
-            Lime2Chip::kernel_width(d).into(),
-        );
+        let mut weights = square_distance.clone();
+        if matches!(weight_strat, LimeWeightStrategy::Exponential) {
+            weights = crate::tensor::ops::nonlinearities::lime_weight(
+                &square_distance,
+                2f64.powf(8.0).into(),
+                LimeCircuit::kernel_width(d).into(),
+            );
+        }
 
         let sqrt_weights =
             crate::tensor::ops::nonlinearities::sqrt(&weights, 2f64.powf(8.0).into());
@@ -233,6 +241,316 @@ impl<F: TensorType + PrimeField + PartialOrd + IntoI64> LassoModel<F> {
             .unwrap()
     }
 
+    // TODO: primal objective!
+    //
+    // OK
+    pub fn primal_objective<
+        T: TensorType
+            + Mul<Output = T>
+            + Add<Output = T>
+            + Sub<Output = T>
+            + std::cmp::PartialOrd
+            + Neg<Output = T>
+            + std::marker::Send
+            + std::marker::Sync
+            + IntoI64,
+    >(
+        intercept: &Tensor<T>,
+        y: &Tensor<T>,
+        x: &Tensor<T>,
+        lime_model: &Tensor<T>,
+        alpha: &T,
+        multiplier: &T, // TODO: remove this param
+        n_samples: &T,
+        scale: bool,
+    ) -> T {
+        use crate::tensor::ops::*;
+
+        let n = y.len() as f64;
+        let y_moved = (y.clone() - intercept.expand(&[y.len()]).unwrap()).unwrap();
+        let mut lime_model = lime_model.clone();
+        lime_model.reshape(&[lime_model.len(), 1]);
+        //let lime_model_t = lime_model.reshape(&[);
+        let m = matmul(&[x.clone(), lime_model.clone()]).unwrap();
+        println!("matmul: {:?}", m);
+        // scale
+
+        let residuals = (y_moved - m).unwrap();
+        let residuals_square = dot(&[residuals.clone(), residuals.clone()], 1).unwrap();
+        let residuals_square = residuals_square[residuals_square.len() - 1].clone();
+        println!("residual_square: {:?}", residuals_square);
+        // scale
+        let mut residual_mult = multiplier.clone() * residuals_square.clone();
+        // scale
+
+        let mut abs_model = abs(&lime_model.clone()).unwrap();
+        println!("l1_abs model: {:?}", lime_model.show());
+        println!("l1_abs: {:?}", abs_model.show());
+        let l1_model = accumulated::sum(&abs_model, 1).unwrap();
+        let l1_model = l1_model[l1_model.len() - 1].clone();
+        println!("l1_alpha sum: {:?}", l1_model);
+        let mut l1_alpha = n_samples.clone() * alpha.clone() * l1_model;
+        println!("l1_alpha: {:?}", l1_alpha);
+
+        let primal_obj = residual_mult + l1_alpha;
+        println!("PRIMAL OBJ: {:?}", primal_obj);
+
+        primal_obj
+
+        //let dual_squared = dot(&[dual.clone(), dual.clone()], 1).unwrap();
+        //let mut dual_squared_val = dual_squared[dual_squared.len() - 1].clone();
+        //if scale {
+        //    dual_squared_val = T::from_i64(
+        //        nonlinearities::const_div(
+        //            &Tensor::new(Some(&[dual_squared_val.into_i64()]), &[1]).unwrap(),
+        //            2f64.powf(16.0),
+        //        )[0],
+        //    );
+        //}
+        //println!("square dual: {:?}", dual_squared_val);
+
+        //let y_moved = (y.clone() - intercept.expand(&[y.len()]).unwrap()).unwrap();
+        //println!("OUTPUTS?: {:?}", y);
+        //println!("CENTERED OUTS: {:?}", y_moved);
+        //let dual_dot_y = dot(&[dual.clone(), y_moved.clone()], 1).unwrap();
+        //let mut dual_dot_y_val = dual_dot_y[dual_dot_y.len() - 1].clone();
+        //if scale {
+        //    dual_dot_y_val = T::from_i64(
+        //        nonlinearities::const_div(
+        //            &Tensor::new(Some(&[dual_dot_y_val.into_i64()]), &[1]).unwrap(),
+        //            2f64.powf(16.0),
+        //        )[0],
+        //    );
+        //}
+        //println!("dual_dot: {:?}", dual_dot_y_val);
+
+        //let mut dual_mult = multiplier.clone() * dual_squared_val.clone();
+        //println!("square_dual_dived: {:?}", dual_mult);
+        //if scale {
+        //    dual_mult = T::from_i64(
+        //        nonlinearities::const_div(
+        //            &Tensor::new(Some(&[dual_mult.into_i64()]), &[1]).unwrap(),
+        //            2f64.powf(24.0),
+        //        )[0],
+        //    );
+        //}
+        //println!("square_dual_dived_scaled: {:?}", dual_mult);
+        //let dual_gap = dual_mult + dual_dot_y_val.clone();
+        //println!("GOT DUAL RES: {:?}", dual_gap);
+        //dual_gap
+    }
+
+    pub fn dual_objective<
+        T: TensorType
+            + Mul<Output = T>
+            + Add<Output = T>
+            + Sub<Output = T>
+            + std::marker::Send
+            + std::marker::Sync
+            + IntoI64,
+    >(
+        dual: &Tensor<T>,
+        intercept: &Tensor<T>,
+        y: &Tensor<T>,
+        multiplier: &T, // TODO: remove this param
+        scale: bool,
+    ) -> T {
+        use crate::tensor::ops::*;
+
+        let n = y.len() as f64;
+        let dual_squared = dot(&[dual.clone(), dual.clone()], 1).unwrap();
+        let mut dual_squared_val = dual_squared[dual_squared.len() - 1].clone();
+        if scale {
+            dual_squared_val = T::from_i64(
+                nonlinearities::const_div(
+                    &Tensor::new(Some(&[dual_squared_val.into_i64()]), &[1]).unwrap(),
+                    2f64.powf(16.0),
+                )[0],
+            );
+        }
+        println!("square dual: {:?}", dual_squared_val);
+
+        let y_moved = (y.clone() - intercept.expand(&[y.len()]).unwrap()).unwrap();
+        println!("OUTPUTS?: {:?}", y);
+        println!("CENTERED OUTS: {:?}", y_moved);
+        let dual_dot_y = dot(&[dual.clone(), y_moved.clone()], 1).unwrap();
+        let mut dual_dot_y_val = dual_dot_y[dual_dot_y.len() - 1].clone();
+        if scale {
+            dual_dot_y_val = T::from_i64(
+                nonlinearities::const_div(
+                    &Tensor::new(Some(&[dual_dot_y_val.into_i64()]), &[1]).unwrap(),
+                    2f64.powf(16.0),
+                )[0],
+            );
+        }
+        println!("dual_dot: {:?}", dual_dot_y_val);
+
+        let mut dual_mult = multiplier.clone() * dual_squared_val.clone();
+        println!("square_dual_dived: {:?}", dual_mult);
+        if scale {
+            dual_mult = T::from_i64(
+                nonlinearities::const_div(
+                    &Tensor::new(Some(&[dual_mult.into_i64()]), &[1]).unwrap(),
+                    2f64.powf(24.0),
+                )[0],
+            );
+        }
+        println!("square_dual_dived_scaled: {:?}", dual_mult);
+        let dual_gap = dual_mult - dual_dot_y_val.clone();
+        println!("GOT DUAL RES: {:?}", dual_gap);
+        dual_gap
+    }
+
+    pub fn dual_feasible(x: &Tensor<f64>, dual: &Tensor<f64>) -> bool {
+        let mut dual = dual.clone();
+        dual.reshape(&[dual.len(), 1]);
+        let m = matmul(&[x.clone(), dual.clone()]).unwrap();
+        println!("GOT M: {:?}", m);
+        let range_check_bracket = (0.01);
+        // less than
+        let lt_range = m
+            .par_enum_map(|_, a_i| {
+                Ok::<_, TensorError>(if (a_i as f64 - range_check_bracket) < 0_f64 {
+                    1.0f64
+                } else {
+                    0.0f64
+                })
+            })
+            .unwrap();
+        println!("GOT m2: {:?}", lt_range);
+        let lt_range = prod(&lt_range, 1).unwrap();
+        let lt_range = lt_range[lt_range.len() - 1].clone();
+        let gt_range = m
+            .par_enum_map(|_, a_i| {
+                Ok::<_, TensorError>(if (a_i as f64 + range_check_bracket) > 0_f64 {
+                    1.0f64
+                } else {
+                    0.0f64
+                })
+            })
+            .unwrap();
+        println!("GOT m2: {:?}, {:?}", lt_range, gt_range);
+        let gt_range = prod(&gt_range, 1).unwrap();
+        let gt_range = gt_range[gt_range.len() - 1].clone();
+        if gt_range * lt_range == 1.0 {
+            true
+        } else {
+            false
+        }
+        //nonlinearities::greater_than(m, range_check_bracket)
+        //    || nonlinearities::less_than(m, -range_check_bracket);
+    }
+
+    //pub fn primal_grad(
+    //    intercept: &Tensor<f64>,
+    //    y: &Tensor<f64>,
+    //    x: &Tensor<f64>,
+    //    lime_model: &Tensor<f64>,
+    //    alpha: &f64,
+    //    multiplier: &f64, // TODO: remove this param
+    //    scale: bool,
+    //) -> Tensor<f64> {
+    //    let test = Tensor::new(Some(&[(multiplier * 2.0)]), &[1])
+    //        .unwrap()
+    //        .expand(&[x.len()])
+    //        .unwrap()
+    //        * x.clone();
+    //}
+
+    pub fn dual_grad(
+        dual: &Tensor<f64>,
+        intercept: &Tensor<f64>,
+        y: &Tensor<f64>,
+        multiplier: &f64, // TODO: remove this param
+        scale: bool,
+    ) -> Tensor<f64> {
+        let test = Tensor::new(Some(&[(multiplier * 2.0)]), &[1])
+            .unwrap()
+            .expand(&[dual.len()])
+            .unwrap()
+            * dual.clone();
+        println!(
+            "GOT TEST: {:?}, dual: {:?}, and {:?}",
+            test,
+            dual,
+            multiplier * 2.0
+        );
+        let y_moved = (y.clone() - intercept.expand(&[y.len()]).unwrap()).unwrap();
+        let grad = test.unwrap() + y_moved;
+
+        println!("GOT!: {:?}", grad);
+        grad.unwrap()
+    }
+
+    fn duality_gap<'a>(
+        x: ArrayView2<'a, f64>,
+
+        y: ArrayView1<'a, f64>,
+
+        w: ArrayView1<'a, f64>,
+
+        l1_ratio: f64,
+
+        penalty: f64,
+    ) -> f64 {
+        let half = 0.5;
+
+        let r = (&y - x.dot(&w));
+
+        let n_samples = x.nrows();
+
+        let l1_reg = l1_ratio * penalty * (n_samples as f64);
+
+        let l2_reg = (1.0 - l1_ratio) * penalty * (n_samples as f64);
+
+        let xta = x.t().dot(&r) - &w * l2_reg;
+
+        let dual_norm_xta = xta.norm_max();
+
+        let r_norm2 = r.dot(&r);
+
+        let w_norm2 = w.dot(&w);
+
+        let (const_, mut gap) = if dual_norm_xta > l1_reg {
+            let const_ = (l1_reg / dual_norm_xta);
+
+            let a_norm2 = r_norm2 * const_ * const_;
+
+            (const_, half * (r_norm2 + a_norm2))
+        } else {
+            (1.0, r_norm2)
+        };
+
+        let l1_norm = w.norm_l1();
+        println!("dnxta: {:?}, l1_reg {:?}", dual_norm_xta, l1_reg);
+        println!("CONST< GAP: {:?} {:?}", const_, gap);
+        println!("l1_reg {:?}", l1_reg * l1_norm);
+        println!("dual? {:?}", const_ * r.dot(&y));
+
+        gap += l1_reg * l1_norm - const_ * r.dot(&y)
+            + half * l2_reg * (1.0 + const_ * const_) * w_norm2;
+
+        let r_test = r.clone() * const_;
+        println!("FEASIBLE??: {:?}", x.t().dot(&(-r_test.clone())));
+        println!("HEY!: their r: {:?}", r);
+        println!("HEY!: their const: {:?}", const_);
+        println!("HEY!: their dual: {:?}", r_test);
+        let r_norm2_test = r_test.dot(&r_test);
+        let primal_obj = half * (r_norm2) + l1_reg * l1_norm;
+        let dual_obj = -half * (r_norm2) - (-r).dot(&y);
+        let dual_obj2 = -half * (r_norm2_test) - (-r_test).dot(&y);
+        println!(
+            "primal? :{:?}, dual: {:?}, dual2: {:?}, gap: {:?}, gap2: {:?}",
+            primal_obj,
+            dual_obj,
+            dual_obj2,
+            primal_obj - dual_obj,
+            primal_obj - dual_obj2
+        );
+
+        gap
+    }
+
     pub fn lasso(
         x: &Tensor<F>,
         inputs: &Tensor<F>,
@@ -240,18 +558,27 @@ impl<F: TensorType + PrimeField + PartialOrd + IntoI64> LassoModel<F> {
         input_scale: Scale,
         output_scale: Scale,
         model_scale: Scale,
+        weight_strat: LimeWeightStrategy,
         k: usize,
     ) -> (Tensor<F>, Tensor<F>, Tensor<F>, F, Tensor<F>) {
-        let sqrt_weights = Self::compute_weights(x, inputs);
-        //println!("weights: {:?}", sqrt_weights);
+        let mut input_scale = input_scale;
+        let mut output_scale = output_scale;
+        let mut inputs = inputs.clone();
+        let mut outputs = outputs.clone();
 
-        let inputs = mult(&[inputs.clone(), sqrt_weights.clone()]).unwrap();
-        let outputs = mult(&[outputs.clone(), sqrt_weights.clone()]).unwrap();
+        if !matches!(weight_strat, LimeWeightStrategy::Uniform) {
+            let sqrt_weights = Self::compute_weights(x, &inputs, weight_strat);
+            //println!("weights: {:?}", sqrt_weights);
 
-        let inputs_float = inputs.dequantize(input_scale + 8);
-        let outputs_float = outputs.dequantize(output_scale + 8);
-        //println!("INPUTS ARE: {:?}", inputs_float);
-        //println!("OUTPUTS ARE: {:?}", outputs_float);
+            inputs = mult(&[inputs.clone(), sqrt_weights.clone()]).unwrap();
+            outputs = mult(&[outputs.clone(), sqrt_weights.clone()]).unwrap();
+            input_scale += 8;
+            output_scale += 8;
+        }
+
+        println!("INPUT OUTPUT SCALE: {:?}", input_scale);
+        let inputs_float = inputs.dequantize(input_scale);
+        let outputs_float = outputs.dequantize(output_scale);
 
         let input_shape = inputs.dims();
         let output_shape = outputs.dims();
@@ -271,33 +598,77 @@ impl<F: TensorType + PrimeField + PartialOrd + IntoI64> LassoModel<F> {
         let model = ElasticNet::params()
             .penalty(0.01)
             .l1_ratio(1.0)
-            .max_iterations(10000)
-            .tolerance(1e-8)
+            .max_iterations(100000)
+            .tolerance(1e-12)
             .fit(&data)
             .unwrap();
+        let intercept_arr = Array::from_shape_vec((1), vec![model.intercept()]).unwrap();
+        println!("DUALITY GAP?? {:?}", model.duality_gap());
+        println!(
+            "MY GAP?: {:?}",
+            Self::duality_gap(
+                inputs_linfa.view(),
+                (&outputs_linfa.view() - intercept_arr).view(),
+                model.hyperplane().view(),
+                1.0,
+                0.01,
+            )
+        );
 
         // TODO: wackyness...
         let dual = if model.hyperplane().iter().all(|x| *x == 0.0) {
             inputs_linfa.dot(model.hyperplane())
         } else {
-            let dual: Array<f64, _> =
-                (outputs_linfa.clone() - model.intercept() - inputs_linfa.dot(model.hyperplane()))
-                    / (inputs.dims()[0] as f64);
-
-            // TODO: other dual alg?
-            //println!("DUAL1: {:?}", dual);
-            let test = inputs_linfa.t().dot(&inputs_linfa);
-            let test2 = test.dot(model.hyperplane());
-            let mut ss = (0..test.shape()[0])
-                .map(|i| {
-                    0.01 / (2.0 * (test2[i] - 2.0 * (outputs_linfa[i] - model.intercept())).abs())
-                })
-                .fold(f64::INFINITY, |a, b| a.min(b));
-            if ss == f64::INFINITY {
-                ss = 0.0;
+            let mut dual: Array<f64, _> =
+                (outputs_linfa.clone() - model.intercept() - inputs_linfa.dot(model.hyperplane()));
+            dual = dual.map(|v| {
+                dequantize(
+                    i64_to_felt::<Fp>(quantize_float(v, 0.0, 16).unwrap()),
+                    16,
+                    0.0,
+                )
+            });
+            println!("HEY!: my r: {:?}", dual);
+            let dual_norm_xta = (inputs_linfa.t().dot(&dual)).norm_max();
+            // add some slack for precision issues
+            let l1_reg = 1.0 * 0.01 * (outputs_linfa.len() as f64);
+            if dual_norm_xta > l1_reg {
+                let const_ = (l1_reg / (dual_norm_xta));
+                println!("HEY!: my const: {:?}", const_);
+                dual *= -const_;
+            } else {
+                dual *= -1.0;
             }
-            2.0 * ss * (inputs_linfa.dot(model.hyperplane()) - (outputs_linfa - model.intercept()))
-            //dual
+            println!("HI THERE");
+            dual = dual.map(|v| {
+                dequantize(
+                    i64_to_felt::<Fp>(quantize_float(v, 0.0, 16).unwrap()),
+                    16,
+                    0.0,
+                )
+            });
+            println!("FEASIBLE??: {:?}", inputs_linfa.t().dot(&dual));
+            println!("INPUT??: {:?}", inputs_linfa);
+            println!("HEY!: my dual: {:?}", dual);
+            /// (inputs.dims()[0] as f64);
+            //// TODO: other dual alg?
+            ////println!("DUAL1: {:?}", dual);
+            //let test = inputs_linfa.t().dot(&inputs_linfa);
+            //println!("TEST: {:?}", test);
+            //println!("hyper {:?}", model.hyperplane());
+            //let test2 = test.dot(model.hyperplane());
+            //println!("TEST2: {:?}", test2);
+            //println!("TEST2 out: {:?}", outputs_linfa);
+            //let mut ss = (0..test.shape()[0])
+            //    .map(|i| {
+            //        0.01 / (2.0 * (test2[i] - 2.0 * (outputs_linfa[i] - model.intercept())).abs())
+            //    })
+            //    .fold(f64::INFINITY, |a, b| a.min(b));
+            //if ss == f64::INFINITY {
+            //    ss = 0.0;
+            //}
+            //2.0 * ss * (inputs_linfa.dot(model.hyperplane()) - (outputs_linfa - model.intercept()))
+            dual
         };
 
         let hyperplane = model.hyperplane().to_vec();
@@ -335,10 +706,77 @@ impl<F: TensorType + PrimeField + PartialOrd + IntoI64> LassoModel<F> {
             .unwrap();
         let intercept =
             i64_to_felt::<F>(quantize_float(&model.intercept(), 0.0, model_scale).unwrap());
-        let dual = Tensor::new(Some(&dual), &[dual.len()])
-            .unwrap()
-            .quantize(16)
-            .unwrap();
+
+        let mult = -1.0 / 2.0;
+        let mut dualf = Tensor::new(Some(&dual), &[dual.len()]).unwrap();
+        let interceptf = Tensor::new(Some(&[model.intercept()]), &[1]).unwrap();
+        let alphaf = Tensor::new(Some(&[model.intercept()]), &[1]).unwrap();
+        let hyperplanef = Tensor::new(Some(&hyperplane), &[model.hyperplane().len()]).unwrap();
+        //let mut obj1 = Self::dual_objective(&dualf, &interceptf, &outputs_float, &mult, false);
+        //let mult_primal = 1.0 / (2.0);
+        //let mult_primal_nsamples = outputs_float.len() as f64;
+        //let mut pobj = Self::primal_objective(
+        //    &interceptf,
+        //    &outputs_float,
+        //    &inputs_float,
+        //    &hyperplanef,
+        //    &0.01,
+        //    &mult_primal,
+        //    &mult_primal_nsamples,
+        //    false,
+        //);
+        //let mut obj_begin = obj1.clone();
+        //let mut dual_test = dualf.clone();
+        //while obj1 <= 0.03 {
+        //    let grad = Self::dual_grad(&dual_test, &interceptf, &outputs_float, &mult, false);
+        //    let test = (dual_test.clone()
+        //        + (Tensor::new(Some(&[0.001]), &[1])
+        //            .unwrap()
+        //            .expand(&[grad.len()])
+        //            .unwrap()
+        //            * grad)
+        //            .unwrap())
+        //    .unwrap();
+        //    let obj = Self::dual_objective(&test, &interceptf, &outputs_float, &mult, false);
+        //    println!("inputs_float: {:?}", inputs_float);
+        //    println!("OBJ TRACE: {:?}", obj);
+        //    let feasible = Self::dual_feasible(&inputs_float, &test);
+        //    if obj >= obj1 && feasible {
+        //        obj1 = obj;
+        //        dual_test = test;
+        //    } else {
+        //        break;
+        //    }
+        //}
+        //let obj2 = Self::dual_objective(
+        //    &dual_test.clone(),
+        //    &interceptf,
+        //    &outputs_float,
+        //    &mult,
+        //    false,
+        //);
+        //// TODO(EVAN): is this useful?
+        //dualf = dual_test.clone();
+        //println!("BEFORE: {:?}, AFTER: {:?}", obj_begin, obj2);
+
+        let dualf = dualf.quantize_f64(16).unwrap();
+        let interceptf = interceptf.quantize_f64(12).unwrap();
+        let outputs_floatf = outputs_float.quantize_f64(12).unwrap();
+        Self::dual_objective(&dualf, &interceptf, &outputs_floatf, &mult, false);
+
+        let dual = dualf.quantize(16).unwrap();
+        let mult2 = i64_to_felt::<F>(
+            quantize_float(&(-(outputs_float.len() as f64) / 2.0), 0.0, 16).unwrap(),
+        );
+        let dg = Self::dual_objective(
+            &dual,
+            &Tensor::new(Some(&[intercept]), &[1]).unwrap(),
+            &outputs,
+            &mult2,
+            true,
+        );
+        println!("GOT: {:?}", dequantize(dg, 8, 0.0));
+
         //.quantize(model_scale)
         //.unwrap();
 

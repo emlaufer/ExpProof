@@ -29,9 +29,6 @@
 //! A library for turning computational graphs, such as neural networks, into ZK-circuits.
 //!
 
-// (EVAN): use surrogates or not!
-pub const USE_SURROGATE: bool = false;
-
 /// Error type
 #[derive(thiserror::Error, Debug)]
 #[allow(missing_docs)]
@@ -99,6 +96,7 @@ use halo2curves::bn256::{Bn256, G1Affine};
 use serde::{Deserialize, Serialize};
 use tosubcommand::ToFlags;
 
+pub mod ablate;
 /// Methods for configuring tensor operations and assigning values to them in a Halo2 circuit.
 pub mod circuit;
 /// CLI commands.

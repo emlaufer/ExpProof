@@ -46,7 +46,8 @@ portable-atomic = "1.6.0"
 tosubcommand = { git = "https://github.com/zkonduit/enum_to_subcommand", package = "tosubcommand" }
 metal = { git = "https://github.com/gfx-rs/metal-rs", optional = true }
 semver = "1.0.22"
-linfa-elasticnet = "0.7.0"
+linfa-elasticnet = {path = "../linfa-elasticnet"}
+linfa-linalg = "0.1.0"
 linfa = "0.7.0"
 ndarray = "0.15"
 rand_distr = "0.4.3"

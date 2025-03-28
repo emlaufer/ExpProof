@@ -40,10 +40,9 @@ use self::input::OnChainSource;
 use self::input::{FileSource, GraphData};
 use self::modules::{GraphModules, ModuleConfigs, ModuleForwardResult, ModuleSizes};
 use crate::circuit::lookup::LookupOp;
-use crate::circuit::modules::lime2::{Lime2Chip, LimeCircuit, LimeConfig, LimeWitness};
+use crate::circuit::modules::lime2::{LimeCircuit, LimeConfig, LimeWitness};
 use crate::circuit::modules::ModulePlanner;
 use crate::circuit::modules::{
-    lime::{LimeInputs, LimeModule},
     perturb::{PerturbChip, PerturbConfig},
     GraphModule, Module,
 };

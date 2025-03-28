@@ -530,6 +530,46 @@ impl<F: PrimeField + TensorType + PartialOrd + std::hash::Hash> ValTensor<F> {
     }
 
     /// Calls `int_evals` on the inner tensor.
+    pub fn get_field_evals(&self) -> Result<Tensor<F>, TensorError> {
+        // finally convert to vector of integers
+        let mut integer_evals: Vec<F> = vec![];
+        match self {
+            ValTensor::Value {
+                inner: v, dims: _, ..
+            } => {
+                // we have to push to an externally created vector or else vaf.map() returns an evaluation wrapped in Value<> (which we don't want)
+                let _ = v.map(|vaf| match vaf {
+                    ValType::Value(v) => v.map(|f| {
+                        integer_evals.push((f));
+                    }),
+                    ValType::AssignedValue(v) => v.map(|f| {
+                        integer_evals.push((f.evaluate()));
+                    }),
+                    ValType::PrevAssigned(v) | ValType::AssignedConstant(v, ..) => {
+                        v.value_field().map(|f| {
+                            integer_evals.push((f.evaluate()));
+                        })
+                    }
+                    ValType::Constant(v) => {
+                        integer_evals.push((v));
+                        Value::unknown()
+                    }
+                });
+            }
+            _ => return Err(TensorError::WrongMethod),
+        };
+        if integer_evals.is_empty() {
+            integer_evals.extend(vec![F::zero().unwrap(); self.len()]);
+        }
+        let mut tensor: Tensor<F> = integer_evals.into_iter().into();
+        match tensor.reshape(self.dims()) {
+            _ => {}
+        };
+
+        Ok(tensor)
+    }
+
+    /// Calls `int_evals` on the inner tensor.
     pub fn get_int_evals(&self) -> Result<Tensor<i64>, TensorError> {
         // finally convert to vector of integers
         let mut integer_evals: Vec<i64> = vec![];

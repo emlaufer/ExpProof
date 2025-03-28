@@ -1,7 +1,6 @@
 ///
 pub mod poseidon;
 
-pub mod normal;
 pub mod sample;
 
 pub mod perturb;
@@ -12,7 +11,6 @@ pub mod polycommit;
 ///
 pub mod planner;
 
-pub mod lime;
 pub mod lime2;
 
 ///

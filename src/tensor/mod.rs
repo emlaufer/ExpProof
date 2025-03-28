@@ -110,6 +110,10 @@ impl TensorType for f32 {
         Some(0.0)
     }
 
+    fn one() -> Option<Self> {
+        Some(1.0)
+    }
+
     // f32 doesnt impl Ord so we cant just use max like we can for i32, usize.
     // A comparison between f32s needs to handle NAN values.
     fn tmax(&self, other: &Self) -> Option<Self> {
@@ -131,6 +135,10 @@ impl TensorType for f32 {
 impl TensorType for f64 {
     fn zero() -> Option<Self> {
         Some(0.0)
+    }
+
+    fn one() -> Option<Self> {
+        Some(1.0)
     }
 
     // f32 doesnt impl Ord so we cant just use max like we can for i32, usize.
@@ -1338,7 +1346,7 @@ impl<T: Clone + TensorType> Tensor<T> {
     }
 }
 
-use crate::graph::utilities::{dequantize, quantize_float};
+use crate::graph::utilities::{dequantize, quantize_float, scale_to_multiplier};
 impl Tensor<f64> {
     pub fn quantize<F>(&self, scale: crate::Scale) -> Result<Tensor<F>, TensorError>
     where
@@ -1347,6 +1355,24 @@ impl Tensor<f64> {
         self.par_enum_map(|i, v| {
             let v_as_int = quantize_float(&v, 0.0, scale)?;
             Ok(i64_to_felt::<F>(v_as_int))
+        })
+    }
+}
+
+impl<T: TensorType + PrimeField + PartialOrd + Field + IntoI64> Tensor<T> {
+    pub fn as_ints(&self) -> Result<Tensor<i64>, TensorError> {
+        self.par_enum_map(|i, v| Ok(felt_to_i64::<T>(v)))
+    }
+}
+
+impl Tensor<f64> {
+    /// Converts float tensor into "quantized" version, but result is still floats
+    /// Good for testing
+    pub fn quantize_f64(&self, scale: crate::Scale) -> Result<Tensor<f64>, TensorError> {
+        self.par_enum_map(|i, v| {
+            let v_as_int = quantize_float(&v, 0.0, scale)?;
+            let multiplier = scale_to_multiplier(scale);
+            Ok(v_as_int as f64 / multiplier)
         })
     }
 }
@@ -1489,9 +1515,7 @@ impl<T: Clone + TensorType> Tensor<Tensor<T>> {
     }
 }
 
-impl<T: TensorType + Add<Output = T> + std::marker::Send + std::marker::Sync + IntoI64> Add
-    for Tensor<T>
-{
+impl<T: TensorType + Add<Output = T> + std::marker::Send + std::marker::Sync> Add for Tensor<T> {
     type Output = Result<Tensor<T>, TensorError>;
     /// Adds tensors.
     /// # Arguments
@@ -1589,9 +1613,7 @@ impl<T: TensorType + Neg<Output = T> + std::marker::Send + std::marker::Sync> Ne
     }
 }
 
-impl<T: TensorType + Sub<Output = T> + std::marker::Send + std::marker::Sync + IntoI64> Sub
-    for Tensor<T>
-{
+impl<T: TensorType + Sub<Output = T> + std::marker::Send + std::marker::Sync> Sub for Tensor<T> {
     type Output = Result<Tensor<T>, TensorError>;
     /// Subtracts tensors.
     /// # Arguments

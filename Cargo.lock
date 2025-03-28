@@ -1930,6 +1930,7 @@ dependencies = [
  "lazy_static",
  "linfa",
  "linfa-elasticnet",
+ "linfa-linalg",
  "log",
  "maybe-rayon",
  "metal",
@@ -3037,9 +3038,9 @@ dependencies = [
 
 [[package]]
 name = "linfa"
-version = "0.7.0"
+version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1cab423110bc374e4cfa915da88952e2c6a4a5a6300ac0a0e68022bff2ace0b3"
+checksum = "56f9097edc7c89d03d526efbacf6d90914e3a8fa53bd56c2d1489e3a90819370"
 dependencies = [
  "approx 0.4.0",
  "ndarray",
@@ -3051,9 +3052,7 @@ dependencies = [
 
 [[package]]
 name = "linfa-elasticnet"
-version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b757157c1378407faa457bc64e1dddf40125d6b0577c14563f47584c1ff8abbd"
+version = "0.7.1"
 dependencies = [
  "approx 0.4.0",
  "linfa",
@@ -3071,6 +3070,7 @@ checksum = "56e7562b41c8876d3367897067013bb2884cc78e6893f092ecd26b305176ac82"
 dependencies = [
  "ndarray",
  "num-traits",
+ "rand 0.8.5",
  "thiserror",
 ]
 
@@ -5918,7 +5918,7 @@ version = "1.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "97fee6b57c6a41524a810daee9286c02d7752c4253064d0b05472833a438f675"
 dependencies = [
- "cfg-if 0.1.10",
+ "cfg-if 1.0.0",
  "static_assertions",
 ]
 

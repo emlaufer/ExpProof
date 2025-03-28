@@ -6,8 +6,7 @@ use super::utilities::{dequantize, quantize_float};
 use super::vars::*;
 use super::GraphSettings;
 use crate::circuit::hybrid::HybridOp;
-use crate::circuit::modules::lime::{LimeInputs, LimeModule};
-use crate::circuit::modules::lime2::{Lime2Chip, LimeCircuit, LimeConfig, LimeWitness};
+use crate::circuit::modules::lime2::{LimeCircuit, LimeConfig, LimeWitness};
 use crate::circuit::modules::GraphModule;
 use crate::circuit::ops::poly::PolyOp;
 use crate::circuit::region::ConstantsMap;
@@ -59,6 +58,8 @@ use tract_onnx::tract_core::internal::DatumType;
 #[cfg(not(target_arch = "wasm32"))]
 use tract_onnx::tract_hir::ops::scan::Scan;
 use unzip_n::unzip_n;
+
+use crate::ablate::*;
 
 unzip_n!(pub 3);
 
@@ -138,8 +139,6 @@ pub struct Model {
     pub graph: ParsedNodes,
     /// Defines which inputs to the model are public and private (params, inputs, outputs) using [VarVisibility].
     pub visibility: VarVisibility,
-
-    pub lime_module: Option<LimeModule>,
 }
 
 ///
@@ -482,18 +481,7 @@ impl Model {
 
         let graph = Self::load_onnx_model(reader, run_args, &visibility)?;
 
-        let lime_module = if let Some(n_samples) = run_args.generate_explanation {
-            let config = <LimeModule as GraphModule<Fp>>::configure(());
-            Some(<LimeModule as GraphModule<Fp>>::new(config))
-        } else {
-            None
-        };
-
-        let om = Model {
-            graph,
-            visibility,
-            lime_module,
-        };
+        let om = Model { graph, visibility };
 
         debug!("\n {}", om.table_nodes());
 
@@ -1029,7 +1017,6 @@ impl Model {
                     let om = Model {
                         graph: subgraph,
                         visibility: visibility.clone(),
-                        lime_module: None,
                     };
 
                     let out_dims = node_output_shapes(n, symbol_values)?;
@@ -1344,12 +1331,26 @@ impl Model {
                 });
 
                 //println!("MODEL INPUT: {:?}", model_input.pshow(8));
-                let outputs = self
-                    .layout_nodes(&mut config, &mut thread_safe_region, &mut results)
-                    .map_err(|e| {
-                        error!("{}", e);
-                        halo2_proofs::plonk::Error::Synthesis
-                    })?;
+                let outputs = if ABLATE_MODEL {
+                    let mut dummy_config =
+                        PolyConfig::dummy(run_args.logrows as usize, run_args.num_inner_cols);
+                    let mut model_config = ModelConfig {
+                        base: dummy_config.clone(),
+                        vars: ModelVars::new_dummy(),
+                    };
+
+                    let mut region = RegionCtx::new_dummy(0, run_args.num_inner_cols, true, false);
+
+                    println!("INPUTS; {:?}", inputs);
+                    self.layout_nodes(&mut model_config, &mut region, &mut results)
+                        .unwrap()
+                } else {
+                    self.layout_nodes(&mut config, &mut thread_safe_region, &mut results)
+                        .map_err(|e| {
+                            error!("{}", e);
+                            halo2_proofs::plonk::Error::Synthesis
+                        })?
+                };
                 log::debug!("STARTING LIME LAYOUT");
 
                 lime_circuit.as_ref().map(|c| {
@@ -1445,25 +1446,6 @@ impl Model {
                         error!("{}", e);
                         halo2_proofs::plonk::Error::Synthesis
                     })?;
-
-                    if let Some(lime_module) = &self.lime_module {
-                        let inputs2 = results[&self.graph.inputs[0]][0].clone();
-                        let outputs = outputs[0].clone();
-                        //println!("inputs: {:?}", inputs);
-                        //println!("self.graph.inputs: {:?}", self.graph.inputs);
-                        let coeffs = results[&self.graph.inputs[1]][0].clone();
-                        let intercept = results[&self.graph.inputs[2]][0].clone();
-                        //println!(
-                        //    "INPUTS: {:?}, INPUTS; {:?}, OUTPUTS: {:?}, COEFF: {:?}, INT: {:?}",
-                        //    inputs, inputs2, outputs, coeffs, intercept
-                        //);
-                        lime_module.layout(
-                            &config.base,
-                            &mut thread_safe_region,
-                            &[inputs2, outputs, coeffs, intercept],
-                        );
-                    }
-                    //lime_chip.distance(&config.base, &mut thread_safe_region, inputs[0]);
                 }
                 // Then number of columns in the circuits
                 #[cfg(not(target_arch = "wasm32"))]
@@ -1712,26 +1694,27 @@ impl Model {
             RegionCtx::new_dummy(0, run_args.num_inner_cols, witness_gen, check_lookup);
 
         println!("INPUTS; {:?}", inputs);
-        let outputs = self.layout_nodes(&mut model_config, &mut region, &mut results)?;
-        //println!("OUTPUTS: {:?}", outputs);
+        // DO this to avoid adding rows when model not being used...
+        let outputs = if ABLATE_MODEL {
+            let mut dummy_config =
+                PolyConfig::dummy(run_args.logrows as usize, run_args.num_inner_cols);
+            let mut model_config = ModelConfig {
+                base: dummy_config.clone(),
+                vars: ModelVars::new_dummy(),
+            };
 
-        //if let Some(lime_module) = &self.lime_module {
-        //    let inputs2 = results[&self.graph.inputs[0]][0].clone();
-        //    let outputs = outputs[0].clone();
-        //    //println!("inputs: {:?}", inputs);
-        //    //println!("self.graph.inputs: {:?}", self.graph.inputs);
-        //    let coeffs = results[&self.graph.inputs[1]][0].clone();
-        //    let intercept = results[&self.graph.inputs[2]][0].clone();
-        //    //println!(
-        //    //    "INPUTS: {:?}, INPUTS; {:?}, OUTPUTS: {:?}, COEFF: {:?}, INT: {:?}",
-        //    //    inputs, inputs2, outputs, coeffs, intercept
-        //    //);
-        //    lime_module.layout(
-        //        &mut model_config.base,
-        //        &mut region,
-        //        &[inputs2, outputs, coeffs, intercept],
-        //    );
-        //}
+            let mut region = RegionCtx::new_dummy(0, run_args.num_inner_cols, true, false);
+
+            println!("INPUTS; {:?}", inputs);
+            self.layout_nodes(&mut model_config, &mut region, &mut results)
+                .unwrap()
+        } else {
+            self.layout_nodes(&mut model_config, &mut region, &mut results)
+                .map_err(|e| {
+                    error!("{}", e);
+                    halo2_proofs::plonk::Error::Synthesis
+                })?
+        };
 
         log::debug!("HEY THERE");
         if self.visibility.output.is_public() || self.visibility.output.is_fixed() {

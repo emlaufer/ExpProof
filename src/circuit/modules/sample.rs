@@ -47,7 +47,7 @@ pub struct SampleConfig<const BITS: usize> {
 /// PoseidonChip is a wrapper around the Pow5Chip that adds a set of advice columns to the gadget Chip to store the inputs of the hash
 #[derive(Debug, Clone)]
 pub struct SampleChip<const BITS: usize> {
-    config: SampleConfig<BITS>,
+    pub config: SampleConfig<BITS>,
 }
 
 impl<const BITS: usize> SampleChip<BITS> {

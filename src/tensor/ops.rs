@@ -935,7 +935,7 @@ pub fn scatter_nd<T: TensorType + Send + Sync>(
 /// let expected = Tensor::<i64>::new(Some(&[2, 15, 2, 1, 1, 0]), &[2, 3]).unwrap();
 /// assert_eq!(result, expected);
 /// ```
-pub fn abs<T: TensorType + Add<Output = T> + std::cmp::Ord + Neg<Output = T>>(
+pub fn abs<T: TensorType + Add<Output = T> + std::cmp::PartialOrd + Neg<Output = T>>(
     a: &Tensor<T>,
 ) -> Result<Tensor<T>, TensorError> {
     // calculate value of output
