@@ -11,7 +11,7 @@ pub mod polycommit;
 ///
 pub mod planner;
 
-pub mod lime2;
+pub mod lime;
 
 ///
 pub mod errors;

@@ -4014,7 +4014,6 @@ pub(crate) fn nonlinearity<F: PrimeField + TensorType + PartialOrd + std::hash::
                     .input
                     .cartesian_coord(region.linear_coord() + i);
                 let selector = config.static_lookups.selectors.get(&(nl.clone(), x, y));
-                //println!("OP: {:?} {} {}, SEL: {:?}", nl, x, y, selector);
                 region.enable(selector, z)?;
                 Ok(())
             })

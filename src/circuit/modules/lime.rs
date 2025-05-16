@@ -1,4 +1,3 @@
-/// OKKKKKKKKKKKES:
 use halo2_proofs::halo2curves::bn256::Fr as Fp;
 use halo2_proofs::{circuit::*, plonk::*, poly::Rotation};
 
@@ -36,7 +35,9 @@ use std::ops::{Add, Deref, DerefMut, Div, Mul, Neg, Range, Sub};
 
 use crate::ablate::*;
 
-// helper to track precision
+/// helper to track precision
+/// Note: This isn't used in all the lime circuit code, since I created it to debug some precision errors
+/// In the future, we should use this instead of manually tracking it through
 #[derive(Debug, Clone)]
 struct PValTensor {
     inner: ValTensor<Fp>,
@@ -200,6 +201,8 @@ impl PValTensor {
         region: &mut RegionCtx<Fp>,
         op: &LookupOp,
     ) -> PValTensor {
+        let in_scale = op.in_scale([self.precision as i32].to_vec()).unwrap();
+        assert_eq!(in_scale, self.precision as i32);
         let inner = nonlinearity(config, region, &[self.inner.clone()], &op).unwrap();
         let out_scale =
             <crate::circuit::ops::lookup::LookupOp as crate::circuit::ops::Op<Fp>>::out_scale(
@@ -773,20 +776,17 @@ impl LimeInputCircuit for VectorInputCircuit {
         output_scale: Scale,
     ) -> Fp {
         let mut inputs = self.generate_model_input(x, samples);
-        println!("inputs: {:?}", inputs);
         let mut inputs = inputs.pad_rows(self.num_points() + 1, Fp::zero()).unwrap();
         inputs
             .set_slice(&[self.num_points()..self.num_points() + 1, 0..self.d], x)
             .unwrap();
 
         let labels = classify(inputs).unwrap();
-        println!("labels: {:?}", labels);
 
         let x_label = labels[self.num_points()];
 
         for i in 1..self.num_points() + 1 {
             if labels[i - 1] != x_label {
-                println!("OP LABEL: {:?}", i);
                 // TODO: Why 10*step?
                 return (Fp::from(i as u64)
                     * i64_to_felt::<Fp>(quantize_float(&(10.0 * self.step), 0.0, 8).unwrap()));
@@ -815,7 +815,6 @@ impl LimeInputCircuit for VectorInputCircuit {
             norms.push((felt_to_i64(norm) as f64 / 2f64.powf(8.0)).round() as i64);
         }
 
-        //println!("square norms scaled!: {:?}", square_norms);
         // scale down to 8 bits...
         let recip_norms = crate::tensor::ops::nonlinearities::recip_sqrt(
             &norms.iter().cloned().into(),
@@ -888,7 +887,6 @@ impl LimeInputCircuit for VectorInputCircuit {
             Fp::from(2u64.pow(8)),
         )
         .unwrap();
-        //println!("square_norms_scaled: {:?}", square_norms_scaled.show());
         // scale down to 8 bits...
         let recip_norms = crate::circuit::ops::layouts::nonlinearity(
             base_config,
@@ -965,8 +963,6 @@ impl LimeInputCircuit for VectorInputCircuit {
         let mut x_label = x_label.clone();
         x_label.expand(&[labels.len()]).unwrap();
 
-        println!("inputs: {:?}", inputs);
-        println!("labels: {:?}", labels);
         let opposite_labels =
             pairwise(base_config, region, &[labels.clone(), x_label], BaseOp::Sub).unwrap();
         let opposite_labels = crate::circuit::ops::layouts::nonlinearity(
@@ -991,8 +987,6 @@ impl LimeInputCircuit for VectorInputCircuit {
             .map(|i| ValType::Constant(Fp::from(((i / 3) + 1) as u64) * step))
             .collect::<Vec<_>>()
             .into();
-        println!("opp-labels: {:?}", opposite_labels);
-        println!("all stds: {:?}", all_stds);
         let opposite_stds = pairwise(
             base_config,
             region,
@@ -1000,7 +994,6 @@ impl LimeInputCircuit for VectorInputCircuit {
             BaseOp::Mult,
         )
         .unwrap();
-        println!("opp-stds: {:?}", opposite_stds);
         let max = create_constant_tensor(Fp::from(self.num_points() as u64) * step, labels.len());
         let same_stds = pairwise(
             base_config,
@@ -1017,10 +1010,8 @@ impl LimeInputCircuit for VectorInputCircuit {
             BaseOp::Add,
         )
         .unwrap();
-        println!("stds: {:?}", stds);
 
         let min_std = min(base_config, region, &[stds]).unwrap();
-        println!("min_std: {:?}", min_std);
 
         min_std.clone()
     }
@@ -1054,127 +1045,6 @@ impl SpheresInputCircuit {
     fn generate_model_input(&self) -> Tensor<Fp> {
         unimplemented!()
     }
-
-    fn run() {
-        //let ball_samples = &samples[n_lime * d..];
-        ////println!("perturbations: {:?}", perturbations);
-
-        ////println!("x: {:?}", x);
-        ////println!("x_border: {:?}", x_border);
-        //let mut radius = Fp::from(0);
-        //let mut vals = vec![];
-        //for i in 0..d {
-        //    let val = x[i] - x_border[i];
-        //    vals.push(val);
-        //    radius += val * val;
-        //}
-        ////println!("diffs: {:?}", vals);
-        ////println!("square RADIUS: {:?}", radius);
-        //let radius = (felt_to_i64(radius) as f64 / 2f64.powf(8.0)).round() as i64;
-        ////println!("scaled RADIUS: {:?}", radius);
-        //let mut radius = crate::tensor::ops::nonlinearities::sqrt(
-        //    &Tensor::new(Some(&[radius]), &[1]).unwrap(),
-        //    2f64.powf(8.0),
-        //);
-        ////println!("RUN RADIUS: {:?}", radius);
-
-        //let ball_tensor = Tensor::new(Some(ball_samples), &[n_ball, d + 2]).unwrap();
-        //let ball_tensor = ball_tensor.clone().map(|x| felt_to_i64(x));
-        //let ball_samples_normal = crate::tensor::ops::nonlinearities::normal_inverse_cdf(
-        //    &ball_tensor,
-        //    2f64.powf(8.0),
-        //    0.0,
-        //    1.0,
-        //);
-        ////println!("ball_samples_normal: {:?}", ball_samples_normal);
-        ////println!(
-        ////    "ball_samples_normal float: {:?}",
-        ////    ball_samples_normal
-        ////        .enum_map::<_, _, ModuleError>(|i, s| Ok(s as f64 / 2f64.powf(8.0)))
-        ////        .unwrap()
-        ////);
-        //let mut square_norms = vec![];
-        //for i in 0..n_ball {
-        //    let mut norm = 0;
-
-        //    for j in 0..d + 2 {
-        //        let val = ball_samples_normal[i * (d + 2) + j];
-        //        norm += val * val;
-        //    }
-        //    square_norms.push(((norm as f64) / 2f64.powf(8.0)).round() as i64);
-        //}
-        ////println!("square norms scaled!: {:?}", square_norms);
-        //// scale down to 8 bits...
-        //let recip_norms = crate::tensor::ops::nonlinearities::recip_sqrt(
-        //    &square_norms.iter().cloned().into(),
-        //    2f64.powf(8.0),
-        //    2f64.powf(8.0),
-        //);
-        ////println!("norms!: {:?}", recip_norms.show());
-
-        //let mut normalized = vec![];
-        //for i in 0..(n_ball) * (d + 2) {
-        //    let val = (ball_samples_normal[i] * recip_norms[(i / (d + 2))]);
-        //    let val_scaled = (val as f64 / 2f64.powf(8.0)).round() as i64;
-        //    normalized.push(val_scaled);
-        //}
-        ////println!("normalized: {:?}", normalized);
-
-        //let normalized = Tensor::new(Some(&normalized), &[n_ball, d + 2]).unwrap();
-        ////println!(
-        ////    "normalized float: {:?}",
-        ////    normalized
-        ////        .enum_map::<_, _, ModuleError>(|i, s| Ok(s as f64 / 2f64.powf(8.0)))
-        ////        .unwrap()
-        ////);
-        //let sphere_samples = normalized.get_slice(&[0..n_ball, 0..d]).unwrap();
-        ////println!("sphere_samples_scaled: {:?}", sphere_samples.show());
-        ////println!(
-        ////    "sphere_samples_scaled float: {:?}",
-        ////    sphere_samples
-        ////        .enum_map::<_, _, ModuleError>(|i, s| Ok(s as f64 / 2f64.powf(8.0)))
-        ////        .unwrap()
-        ////);
-        ////let ball_norms =
-
-        //// scale to radius...
-        //let radius_expanded = radius.expand(&[n_ball, d]).unwrap();
-        //let sphere_samples_radius = mult(&[sphere_samples.clone(), radius_expanded])?;
-        ////println!("sphere_samples_radius: {:?}", sphere_samples_radius.show());
-        //let sphere_samples_radius_scaled = sphere_samples_radius
-        //    .enum_map::<_, _, ModuleError>(|i, v| Ok((v as f64 / 2f64.powf(8.0)).round() as i64))?;
-        ////println!(
-        ////    "sphere_samples_radius_scaled: {:?}",
-        ////    sphere_samples_radius_scaled.show()
-        ////);
-        ////println!(
-        ////    "sphere_samples_radius_scaled float: {:?}",
-        ////    sphere_samples_radius_scaled
-        ////        .enum_map::<_, _, ModuleError>(|i, s| Ok(s as f64 / 2f64.powf(8.0)))
-        ////        .unwrap()
-        ////);
-
-        ////println!("X: {:?}", x);
-        //let mut perturbations2 = sphere_samples_radius_scaled
-        //    .enum_map::<_, _, ModuleError>(|i, v| Ok(x[i % d] + i64_to_felt::<Fp>(v)))
-        //    .unwrap();
-        ////println!("perturbations2: {:?}", perturbations2.show());
-
-        //// print out the floating point...
-        //let x_test = Tensor::new(Some(&x), &[d]).unwrap();
-        ////println!("x: {:?}", x_test.dequantize(8));
-        ////println!("perturbations2: {:?}", perturbations2.dequantize(8));
-
-        //// Must pass through normal etc...
-        //// FIXME(EVAN)
-        ////perturbations.extend(perturbations2);
-
-        //let mut res = x.clone();
-        //res.extend(perturbations);
-        //res.extend(x_border);
-        //res.extend(perturbations2);
-        //res
-    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -1182,13 +1052,9 @@ pub struct LimeWitness {
     pub model_input: Tensor<Fp>,
     pub surrogate: Vec<Fp>,
     pub coefficients: Vec<Fp>,
-    // TODO: topk...
-    // TODO
     pub intercept: Fp,
     pub dual: Vec<Fp>,
     pub std: Fp,
-    // TODO: surrogate?
-    //Some((coeffs, top_k, top_k_idx, intercept, dual, surrogate))
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -1219,10 +1085,13 @@ use crate::RunArgs;
 impl LimeCircuit {
     const LIME_MULTIPLIER: u64 = 4;
     const DUAL_GAP_TOLERANCE: f64 = 0.1;
-    const DUAL_INPUT_PRECISION: u64 = 16;
 
+    const INPUT_PRECISION: u64 = 8;
+    const DUAL_INPUT_PRECISION: u64 = 16;
     const DUAL_PRECISION: u64 = 16;
-    const DUAL_GAP_PRECISION: u64 = 12;
+    const DUAL_GAP_PRECISION: u64 = 16;
+
+    const ALPHA: f64 = 0.010009765625;
 
     pub fn new(model: &Model, run_args: &RunArgs) -> Self {
         let d = model
@@ -1233,7 +1102,6 @@ impl LimeCircuit {
         let num_points = run_args.generate_explanation.unwrap();
         let sample_circuit = Self::new_sampling_circuit(run_args, d);
         let weight_strategy = run_args.lime_weight_strategy.clone().unwrap();
-        println!("model shapes: {:?}", model.graph.input_shapes());
 
         Self {
             input_circuit,
@@ -1354,7 +1222,7 @@ impl LimeCircuit {
                 (Self::DUAL_GAP_TOLERANCE * 2f64.powf(Self::DUAL_GAP_PRECISION as f64)) as i64;
             required_range_checks.push((-dual_gap_tolerance, dual_gap_tolerance));
             let dual_feasible_tolerance = (1.05
-                * (0.01 * self.num_points as f64)
+                * (Self::ALPHA * self.num_points as f64)
                 * 2f64.powf(Self::DUAL_GAP_PRECISION as f64))
             .ceil() as i64;
             required_range_checks.push((-dual_feasible_tolerance, dual_feasible_tolerance));
@@ -1440,8 +1308,6 @@ impl LimeCircuit {
             .map(|(i, v)| v + surrogate[i % self.d])
             .collect::<Vec<_>>();
 
-        println!("GOT PERTS: {:?}", perturbations);
-
         let mut res = surrogate.to_vec();
         res.extend(perturbations);
         Ok(res)
@@ -1451,7 +1317,6 @@ impl LimeCircuit {
     pub fn run(&self, inputs: &mut [Tensor<Fp>], model: &Model, run_args: &RunArgs) -> LimeWitness {
         let d = inputs[0].dims()[1];
         assert_eq!(self.d, d);
-        println!("d: {}", d);
         let batch_size = model.graph.input_shapes().unwrap()[0][0];
 
         let input = inputs[0].get_slice(&[0..1, 0..d]).unwrap();
@@ -1495,7 +1360,6 @@ impl LimeCircuit {
                     i += 1;
                 }
 
-                println!("OUTPUT: {:?}", output);
                 Ok(Tensor::new(Some(&output), &[batch.dims()[0]]).unwrap())
             };
 
@@ -1528,7 +1392,6 @@ impl LimeCircuit {
             let std =
                 self.input_circuit
                     .find_std(&classify, &perturb, &input_samples, &input, 8, 0);
-            println!("GOT STD: {:?}", std);
 
             let lime_inputs = self
                 .generate_lime_inputs(&surrogate, lime_samples, std)
@@ -1545,9 +1408,9 @@ impl LimeCircuit {
                 &surrogate,
                 &lime_points,
                 &labels,
-                8,
+                Self::INPUT_PRECISION as i32,
                 0,
-                12,
+                Self::DUAL_GAP_PRECISION as i32,
                 self.weight_strategy.clone(),
                 run_args.top_k.unwrap(),
             );
@@ -1601,7 +1464,6 @@ impl LimeCircuit {
 
         let d = lime_samples.dims()[1];
         if ABLATE_INPUTS {
-            println!("LIME SAMPLES: {:?}", lime_samples);
             let samples = self.sample_circuit.generate_witness(
                 &lime_samples.get_field_evals().unwrap(),
                 std.get_field_evals().unwrap()[0],
@@ -1636,8 +1498,6 @@ impl LimeCircuit {
         )
         .unwrap();
 
-        println!("GOT SAMPLES: {:?}", lime_samples);
-
         Ok(lime_samples)
     }
 
@@ -1652,9 +1512,6 @@ impl LimeCircuit {
         surrogate: &ValTensor<Fp>,
         samples: &ValTensor<Fp>,
     ) -> Result<ValTensor<Fp>, ModuleError> {
-        //self.generate_samples(layouter)?;
-        //
-        //println!("SAMPLES: {}", samples.show());
         let d = x.dims()[0];
         assert_eq!(x.dims(), &[d]);
 
@@ -1670,12 +1527,10 @@ impl LimeCircuit {
             surrogate,
             &input_samples,
         );
-        //println!("lime perts: {:?}", lime_perturbations.show());
         let mut result = x.concat(lime_perturbations).unwrap();
         result = result.concat(input_points).unwrap();
         result.reshape(&[self.num_points() + 1, d]).unwrap();
         Ok(result)
-        //unimplemented!();
     }
 
     pub fn layout_exp_weights(
@@ -1688,13 +1543,11 @@ impl LimeCircuit {
     ) -> PValTensor {
         // expand x
         let d = x_border.shape()[0];
-        println!("X_BORDER IS: {:?}", x_border);
         let mut x_expanded = x_border.clone();
         x_expanded = x_expanded.reshape(&[1, d]);
         x_expanded = x_expanded.expand(&[self.num_points, d]);
         let deltas = x_expanded.sub(config, region, inputs);
 
-        println!("DELTAS IS: {:?}", x_border);
         let square_distance = deltas
             .einsum(config, region, &deltas, "ij,ij->i")
             .rescale(config, region, 8);
@@ -1708,7 +1561,6 @@ impl LimeCircuit {
                 sigma: Self::kernel_width(d).into(),
             },
         );
-        //println!("WEIGHTS: {:?}", weights.show());
 
         weights
     }
@@ -1723,7 +1575,6 @@ impl LimeCircuit {
     ) -> PValTensor {
         // expand x
         let d = x_border.shape()[0];
-        println!("X_BORDER IS: {:?}", x_border);
         let mut x_expanded = x_border.clone();
         x_expanded = x_expanded.reshape(&[1, d]);
         x_expanded = x_expanded.expand(&[self.num_points, d]);
@@ -1822,26 +1673,18 @@ impl LimeCircuit {
         //   b. pass into lookup table (exp(_ / sigma^2))
         // 2. multiply points and labels by sqrt of weights
 
-        let INPUT_PRECISION = 8;
-        let DUAL_PRECISION = 16;
-        let DUAL_GAP_PRECISION = 12;
-
-        let x_border = PValTensor::new(x_border.clone(), INPUT_PRECISION);
-        let inputs = PValTensor::new(inputs.clone(), INPUT_PRECISION);
+        let x_border = PValTensor::new(x_border.clone(), Self::INPUT_PRECISION);
+        let inputs = PValTensor::new(inputs.clone(), Self::INPUT_PRECISION);
         let outputs = PValTensor::new(outputs.clone(), 0);
-        let lime_model = PValTensor::new(lime_model.clone(), DUAL_GAP_PRECISION);
-        println!("MODEL IS: {:?}", lime_model.show());
-        let lime_intercept = PValTensor::new(lime_intercept.clone(), DUAL_GAP_PRECISION);
-        let dual = PValTensor::new(dual.clone(), DUAL_PRECISION);
+        let lime_model = PValTensor::new(lime_model.clone(), Self::DUAL_GAP_PRECISION);
+        let lime_intercept = PValTensor::new(lime_intercept.clone(), Self::DUAL_GAP_PRECISION);
+        let dual = PValTensor::new(dual.clone(), Self::DUAL_PRECISION);
 
         log::debug!("LIME LAYOUT");
         region.debug_report();
         let d = x_border.shape()[0];
         let inputs = inputs.slice(&[1..self.num_points + 1, 0..d]);
         let outputs = outputs.slice(&[1..self.num_points + 1]);
-
-        println!("LIME MODEL: {:?}", lime_model.show());
-        println!("LIME DUAL: {:?}", dual.show());
 
         let (inputs, outputs) = if !matches!(self.weight_strategy, LimeWeightStrategy::Uniform) {
             let weights = self.layout_lime_weights(config, region, &x_border, &inputs);
@@ -1856,21 +1699,17 @@ impl LimeCircuit {
             );
 
             // multiply inputs and outputs by sqrt weights
-            // see: https://github.com/marcotcr/lime/blob/fd7eb2e6f760619c29fca01INPUT_PRECISION7c07b82157601b32/lime/lime_base.py#L1DUAL_PRECISION
+            // see: https://github.com/marcotcr/lime/blob/fd7eb2e6f760619c29fca01Self::INPUT_PRECISION7c07b82157601b32/lime/lime_base.py#L1Self::DUAL_PRECISION
             let mut input_sqrt_weights = sqrt_weights.clone();
             input_sqrt_weights = input_sqrt_weights.expand(&[self.num_points, d]);
-            let inputs = input_sqrt_weights.mul(config, region, &inputs).rescale(
-                config,
-                region,
-                INPUT_PRECISION,
-            );
+            let inputs = input_sqrt_weights.mul(config, region, &inputs);
 
             let mut output_sqrt_weights = sqrt_weights.clone();
             output_sqrt_weights = output_sqrt_weights.expand(&[self.num_points]);
             let outputs = output_sqrt_weights.mul(config, region, &outputs).rescale(
                 config,
                 region,
-                INPUT_PRECISION,
+                Self::INPUT_PRECISION,
             );
             (inputs, outputs)
         } else {
@@ -1878,107 +1717,84 @@ impl LimeCircuit {
         };
 
         // RESCALE things for the computation...
-        let outputsd = outputs.rescale(config, region, DUAL_GAP_PRECISION);
+        let outputsd = outputs.rescale(config, region, Self::DUAL_GAP_PRECISION);
+        let inputs = inputs.rescale(config, region, Self::DUAL_GAP_PRECISION);
 
         // residuals part
-        let deltas = inputs
-            .einsum(config, region, &lime_model, "ij,j->ik")
-            .rescale(config, region, DUAL_PRECISION);
+        let deltas = inputs.einsum(config, region, &lime_model, "ij,j->ik");
 
-        // rescale intercept to DUAL_PRECISION bits
+        // rescale intercept to Self::DUAL_PRECISION bits
         let mut lime_intercept = lime_intercept.clone();
         lime_intercept = lime_intercept.expand(&[self.num_points]);
-        println!("OUTPUTS?: {:?}", outputsd.show());
         let centered_outputs =
             outputsd
                 .sub(config, region, &lime_intercept)
-                .rescale(config, region, DUAL_PRECISION);
-        println!("centered: {:?}", centered_outputs.show());
-
+                .rescale(config, region, deltas.precision);
         let intermediate = centered_outputs.sub(config, region, &deltas);
-        let square_residuals =
-            intermediate
-                .dot(config, region, &intermediate)
-                .rescale(config, region, DUAL_PRECISION);
-        println!("residual_square: {:?}", square_residuals.show());
+        let intermediate = intermediate.rescale(config, region, 28);
+        let square_residuals = intermediate.dot(config, region, &intermediate);
+        let square_residuals = square_residuals.rescale(config, region, Self::DUAL_PRECISION);
 
-        let multiplier = PValTensor::constant_f64(1f64 / (2f64), DUAL_PRECISION)
+        let multiplier = PValTensor::constant_f64(1f64 / (2f64), Self::DUAL_PRECISION)
             .expand(square_residuals.shape());
         let square_residuals_dived = square_residuals.mul(config, region, &multiplier).rescale(
             config,
             region,
-            DUAL_GAP_PRECISION,
+            Self::DUAL_GAP_PRECISION,
         );
 
-        let alpha = PValTensor::constant_f64(0.01, DUAL_GAP_PRECISION);
-        let multiplier = PValTensor::constant_f64(self.num_points as f64, DUAL_GAP_PRECISION);
+        let alpha = PValTensor::constant_f64(Self::ALPHA, Self::DUAL_GAP_PRECISION);
+        let multiplier = PValTensor::constant_f64(self.num_points as f64, Self::DUAL_GAP_PRECISION);
         let l1_part =
             lime_model.nonlinearity(config, region, &crate::circuit::ops::lookup::LookupOp::Abs);
-        println!("l1_abs model: {:?}", lime_model.show());
-        println!("l1_abs: {:?}", l1_part.show());
         let l1_part = l1_part.sum(config, region);
-        println!("l1_alpha sum: {:?}", l1_part.show());
         let l1_part = l1_part.mul(config, region, &alpha);
-        let l1_part = l1_part.rescale(config, region, DUAL_GAP_PRECISION);
         let l1_part = l1_part.mul(config, region, &multiplier);
-        println!("l1_alpha scale: {:?}", l1_part.show());
-        let l1_part = l1_part.rescale(config, region, DUAL_GAP_PRECISION);
-        println!("l1_alpha: {:?}", l1_part.show());
+        let l1_part = l1_part.rescale(config, region, Self::DUAL_GAP_PRECISION);
+        let l1_part = l1_part.rescale(config, region, Self::DUAL_GAP_PRECISION);
 
         let mut primal_objective = square_residuals_dived.add(config, region, &l1_part);
-        println!("PRIMAL OBJ: {:?}", primal_objective.show());
 
         // compute dual objective
         let mut square_dual = dual.dot(config, region, &dual);
-        square_dual = square_dual.rescale(config, region, DUAL_PRECISION);
-        println!("square dual: {:?}", square_dual.show());
+        square_dual = square_dual.rescale(config, region, Self::DUAL_PRECISION);
 
-        let multiplier =
-            PValTensor::constant_f64(-1f64 / (2f64), DUAL_PRECISION).expand(square_dual.shape());
-        let square_dual_dived =
-            square_dual
-                .mul(config, region, &multiplier)
-                .rescale(config, region, DUAL_PRECISION);
-
-        println!(
-            "DUAL LEN: {:?}, centered_outputs: {:?}",
-            dual.shape(),
-            centered_outputs.shape()
+        let multiplier = PValTensor::constant_f64(-1f64 / (2f64), Self::DUAL_PRECISION)
+            .expand(square_dual.shape());
+        let square_dual_dived = square_dual.mul(config, region, &multiplier).rescale(
+            config,
+            region,
+            Self::DUAL_PRECISION,
         );
-        let mut dual_res =
-            dual.dot(config, region, &centered_outputs)
-                .rescale(config, region, DUAL_PRECISION);
 
-        println!("CENTERED OUTS: {:?}", centered_outputs.show());
-        println!("dual_dot: {:?}", dual_res.show());
+        let mut dual_res = dual.dot(config, region, &centered_outputs).rescale(
+            config,
+            region,
+            Self::DUAL_PRECISION,
+        );
+
         let dual_res = square_dual_dived.sub(config, region, &dual_res).rescale(
             config,
             region,
-            DUAL_GAP_PRECISION,
+            Self::DUAL_GAP_PRECISION,
         );
-        println!("dual_res: {:?}", dual_res.show());
 
         let dual_objective = dual_res;
-        println!("primal obj: {:?}", primal_objective.show());
-        println!("dual obj: {:?}", dual_objective.show());
         let dual_gap = primal_objective.sub(config, region, &dual_objective);
-        println!("dual gap: {:?}", dual_gap.show());
 
         let range_check_bracket =
-            (Self::DUAL_GAP_TOLERANCE * 2f64.powf(DUAL_GAP_PRECISION as f64)) as i64;
+            (Self::DUAL_GAP_TOLERANCE * 2f64.powf(Self::DUAL_GAP_PRECISION as f64)) as i64;
         dual_gap.range_check(config, region, &(-range_check_bracket, range_check_bracket));
 
         // check dual is feasible
-        let range_check_bracket =
-            (1.05 * (0.01 * self.num_points as f64) * 2f64.powf(DUAL_GAP_PRECISION as f64)).ceil()
-                as i64;
+        let range_check_bracket = (1.05
+            * (Self::ALPHA * self.num_points as f64)
+            * 2f64.powf(Self::DUAL_GAP_PRECISION as f64))
+        .ceil() as i64;
         let range_check_felt: Fp = i64_to_felt(range_check_bracket);
-        println!("DUAL: {:?}", dual.show());
-        println!("INPUTS: {:?}", inputs.show());
         let mut dual_feasible = inputs.einsum(config, region, &dual, "ji,j->i");
-        println!("FEASIBLE: {:?}", dual_feasible.show());
         dual_feasible
-            .rescale(config, region, DUAL_GAP_PRECISION)
+            .rescale(config, region, Self::DUAL_GAP_PRECISION)
             .range_check(config, region, &(-range_check_bracket, range_check_bracket));
 
         region.debug_report();

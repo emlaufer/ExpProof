@@ -40,7 +40,7 @@ use self::input::OnChainSource;
 use self::input::{FileSource, GraphData};
 use self::modules::{GraphModules, ModuleConfigs, ModuleForwardResult, ModuleSizes};
 use crate::circuit::lookup::LookupOp;
-use crate::circuit::modules::lime2::{LimeCircuit, LimeConfig, LimeWitness};
+use crate::circuit::modules::lime::{LimeCircuit, LimeConfig, LimeWitness};
 use crate::circuit::modules::ModulePlanner;
 use crate::circuit::modules::{
     perturb::{PerturbChip, PerturbConfig},
@@ -937,9 +937,9 @@ impl GraphCircuit {
         &mut self,
         data: &GraphData,
     ) -> Result<Vec<Tensor<Fp>>, GraphError> {
-        let shapes = self.model().graph.input_shapes()?;
-        let scales = self.model().graph.get_input_scales();
-        let input_types = self.model().graph.get_input_types()?;
+        let mut shapes = self.model().graph.input_shapes()?;
+        let mut scales = self.model().graph.get_input_scales();
+        let mut input_types = self.model().graph.get_input_types()?;
         debug!("input scales: {:?}", scales);
 
         match &data.input_data {
@@ -954,8 +954,8 @@ impl GraphCircuit {
     #[cfg(not(target_arch = "wasm32"))]
     pub async fn load_graph_input(&self, data: &GraphData) -> Result<Vec<Tensor<Fp>>, GraphError> {
         let mut shapes = self.model().graph.input_shapes()?;
-        let scales = self.model().graph.get_input_scales();
-        let input_types = self.model().graph.get_input_types()?;
+        let mut scales = self.model().graph.get_input_scales();
+        let mut input_types = self.model().graph.get_input_types()?;
         debug!("input shapes: {:?}", shapes);
         debug!("input scales: {:?}", scales);
 
@@ -975,18 +975,6 @@ impl GraphCircuit {
                 input_types,
             )
             .await?;
-        if let Some(num_samples) = self.settings().run_args.generate_explanation {
-
-            //let mut samples =
-            //    PerturbChip::run((data[0].to_vec(), num_samples)).unwrap()[0].to_owned();
-            //let input_shapes = self.model().graph.input_shapes()?;
-            //let mut data_vec = data[0].to_vec();
-            //data_vec.append(&mut samples);
-            //let mut data_vec: Tensor<Fp> = data_vec.into_iter().into();
-            //data_vec.reshape(&input_shapes[0]).unwrap();
-            //data[0] = data_vec;
-            //println!("GOT SAMPLES: {:?}", data[0]);
-        }
 
         Ok(data)
     }
@@ -1355,147 +1343,13 @@ impl GraphCircuit {
             .lime
             .as_ref()
             .map(|lime| lime.run(&mut inputs, &self.model(), &self.settings().run_args));
-        /*let lime_model = if let Some(n_samples) = self.settings().run_args.generate_explanation {
-            let surrogate_samples = self.settings().run_args.surrogate_samples.unwrap();
-            //println!("SAMPLES!: {:?}", surrogate_samples);
-            // generate perturbations of input
-            // TODO:replace with surrogate...
-            let d = inputs[0].dims()[1];
-            //println!("START");
-
-            let d = inputs[0].dims()[1];
-            let batch_size = self.model().graph.input_shapes().unwrap()[0][0];
-            // TODO: move this elsewhere?
-            // This closure accepts batches of any size for inferrence
-            let classify = |mut batch: Tensor<Fp>| {
-                //println!("batch: {:?}", batch.dims());
-                let mut n = batch.dims()[0];
-                let mut i = 0;
-
-                let mut output = vec![];
-                while n > 0 {
-                    let mini_batch = if n < batch_size {
-                        let mini_batch = batch
-                            .get_slice(&[i * batch_size..batch.dims()[0], 0..d])
-                            .unwrap();
-                        mini_batch.pad_rows(batch_size, Fp::zero()).unwrap()
-                    } else {
-                        batch
-                            .get_slice(&[i * batch_size..(i + 1) * batch_size, 0..d])
-                            .unwrap()
-                    };
-
-                    // TODO pad the batch.... then we can handle it...
-                    let mut fresh_inputs = inputs.to_vec();
-                    fresh_inputs[0] = mini_batch;
-
-                    let res = self.model().forward(
-                        &fresh_inputs,
-                        &self.settings().run_args,
-                        true,
-                        true,
-                    )?;
-                    println!("OK!!!! {} {}, {:?}", n, batch_size, res.outputs);
-                    output.extend(
-                        res.outputs[0]
-                            .get_slice(&[0..(std::cmp::min(n, batch_size))])
-                            .unwrap()
-                            .to_vec()
-                            .clone(),
-                    );
-                    n = if n < batch_size { 0 } else { n - batch_size };
-                    i += 1;
-                }
-
-                //println!("OUTPUT: {:?}", output);
-                Ok(Tensor::new(Some(&output), &[batch.dims()[0]]).unwrap())
-            };
-
-            use crate::circuit::modules::sample::SampleChip;
-            let samples = SampleChip::<8>::run((n_samples + surrogate_samples) * d).unwrap();
-            // TODO: compute samples via our hash function....
-            let perturb = |x: Tensor<Fp>| {
-                let d = x.dims()[1];
-                x.expand(&[n_samples, d]).unwrap();
-                // get first n*d samples
-                let y = Tensor::new(Some(&samples[0..n_samples * d]), &[n_samples, d]).unwrap();
-                let multiplier_int = 2;
-                let multiplier = Fp::from(2);
-                let y = y
-                    .par_enum_map::<_, _, Error>(|i, v| Ok(multiplier * v))
-                    .unwrap();
-                let add = (x + y).unwrap();
-                let res = add
-                    .par_enum_map::<_, _, GraphError>(|i, v| Ok(v - Fp::from(multiplier_int * 128)))
-                    .unwrap();
-                //println!("PERTURBED X_BORDER: {:?}", res);
-                res
-            };
-
-            // TODO: change structure
-            let input = inputs[0].get_slice(&[0..1, 0..d]).unwrap();
-
-            // add surrogate point to inputs...
-            // TODO: fix constants
-            let surrogate =
-                LassoModel::find_local_surrogate(classify, perturb, &input, 8, 0, n_samples, 10);
-
-            let samples = Lime2Chip::run(
-                inputs[0].to_vec(),
-                surrogate.clone().unwrap_or(inputs[0].clone()).to_vec(),
-                n_samples,
-                surrogate_samples,
-                d,
-            )
-            .unwrap();
-            let lime_samples =
-                Tensor::new(Some(&samples[d..(n_samples + 1) * d]), &[n_samples, d]).unwrap();
-            //println!("lime samples: {:?}", samples);
-            let labels = classify(lime_samples.clone()).unwrap();
-            //println!("labels: {:?}", labels);
-
-            let x_border = if (crate::USE_SURROGATE) {
-                surrogate.clone().unwrap()
-            } else {
-                inputs[0].clone()
-            };
-
-            let (coeffs, top_k, top_k_idx, intercept, dual) = LassoModel::lasso(
-                &x_border,
-                &lime_samples,
-                &labels,
-                8,
-                0,
-                8,
-                self.settings().run_args.top_k.unwrap(),
-            );
-
-            //println!("MODEL!: {:?}", model);
-            //println!("samples: {:?}", samples);
-            //println!("surrogate: {:?}", model.local_surrogate);
-            let n_inputs = Lime2Chip::input_size(n_samples, surrogate_samples);
-            model_inputs[0] = Tensor::new(Some(&samples), &[n_inputs, d]).unwrap();
-            //println!("END");
-
-            Some((coeffs, top_k, top_k_idx, intercept, dual, surrogate))
-        } else {
-            None
-        };*/
-        //let local_surrogate = lime_model
-        //    .clone()
-        //    .map(|m| m.5.map(|v| v.to_vec()))
-        //    .flatten();
-        println!("MODEL IS: {:?}", lime_witness);
 
         lime_witness
             .as_ref()
             .map(|w| model_inputs[0] = w.model_input.clone());
-        //println!("MODEL INPUTS: {:?}", model_inputs);
         let mut model_results =
             self.model()
                 .forward(&model_inputs, &self.settings().run_args, witness_gen, true)?;
-        //println!("MODEL RESULTS: {:?}", model_results.outputs);
-        //println!("TEST: {:?}", inputs);
 
         if visibility.output.requires_processing() {
             let module_outlets = visibility.output.overwrites_inputs();
@@ -1526,37 +1380,6 @@ impl GraphCircuit {
         let mut input_scales = self.model().graph.get_input_scales();
         let mut output_scales = self.model().graph.get_output_scales()?;
 
-        //let lime_model = None;
-        // TODO: move into model probably...
-        //let lime_model = if let Some(n_samples) = self.settings().run_args.generate_explanation {
-        //    // ensure input well shaped, and only make model on perturbed samples
-        //    let input_dim = original_inputs[0].dims();
-        //    let lime_inputs = original_inputs[0].get_slice(&[1..input_dim[0], 0..input_dim[1]])?;
-
-        //    let output_dim = model_results.outputs[0].dims();
-        //    let lime_outputs = model_results.outputs[0].get_slice(&[1..output_dim[0]])?;
-        //    println!("INPUT SCALES: {:?}", input_scales);
-
-        //    let lime_inputs = LimeInputs {
-        //        inputs: lime_inputs,
-        //        outputs: lime_outputs,
-        //        input_scale: input_scales[0],
-        //        output_scale: output_scales[0],
-        //        out_scale: input_scales[1],
-        //    };
-        //    let lime_model = LimeModule::run(lime_inputs).unwrap();
-
-        //    inputs[1] = (lime_model[0].clone());
-        //    inputs[2] = (lime_model[1].clone());
-
-        //    input_scales.push(input_scales[0]);
-        //    input_scales.push(input_scales[0]);
-
-        //    Some(lime_model)
-        //} else {
-        //    None
-        //};
-
         let mut witness = GraphWitness {
             inputs,
             pretty_elements: None,
@@ -1573,12 +1396,6 @@ impl GraphCircuit {
             max_range_size: model_results.max_range_size,
 
             lime_witness,
-            //local_surrogate,
-            //lime_coeffs: Some(lime_model.clone().unwrap().0.clone().to_vec()),
-            //lime_intercept: Some(lime_model.clone().unwrap().3.clone()),
-            //lime_dual: Some(lime_model.clone().unwrap().4.clone().to_vec()),
-            //lime_top_k: Some(lime_model.clone().unwrap().1.clone().to_vec()),
-            //lime_top_k_idx: Some(lime_model.clone().unwrap().2.clone().to_vec()),
         };
 
         witness.generate_rescaled_elements(input_scales, output_scales, visibility);

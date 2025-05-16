@@ -6,7 +6,7 @@ use super::utilities::{dequantize, quantize_float};
 use super::vars::*;
 use super::GraphSettings;
 use crate::circuit::hybrid::HybridOp;
-use crate::circuit::modules::lime2::{LimeCircuit, LimeConfig, LimeWitness};
+use crate::circuit::modules::lime::{LimeCircuit, LimeConfig, LimeWitness};
 use crate::circuit::modules::GraphModule;
 use crate::circuit::ops::poly::PolyOp;
 use crate::circuit::region::ConstantsMap;
@@ -1676,6 +1676,7 @@ impl Model {
         debug!("calculating num of constraints using dummy model layout...");
 
         let start_time = instant::Instant::now();
+        let mut inputs = inputs.to_vec();
 
         let mut results = BTreeMap::<usize, Vec<ValTensor<Fp>>>::new();
 
@@ -1694,7 +1695,7 @@ impl Model {
             RegionCtx::new_dummy(0, run_args.num_inner_cols, witness_gen, check_lookup);
 
         println!("INPUTS; {:?}", inputs);
-        // DO this to avoid adding rows when model not being used...
+        let outputs = self.layout_nodes(&mut model_config, &mut region, &mut results)?;
         let outputs = if ABLATE_MODEL {
             let mut dummy_config =
                 PolyConfig::dummy(run_args.logrows as usize, run_args.num_inner_cols);

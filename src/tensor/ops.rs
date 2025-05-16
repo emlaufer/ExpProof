@@ -1413,7 +1413,6 @@ pub mod nonlinearities {
     pub fn lime_weight(a: &Tensor<i64>, input_scale: f64, sigma: f64) -> Tensor<i64> {
         a.enum_map(|_, a_i| {
             let rescaled = (a_i as f64) / input_scale;
-            println!("query on: {:?}", rescaled);
             let e = std::f64::consts::E;
             let res = e.powf((-1.0 * rescaled) / sigma.powf(2.0));
             Ok::<_, TensorError>((res * input_scale).round() as i64)

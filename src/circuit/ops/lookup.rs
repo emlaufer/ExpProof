@@ -284,6 +284,20 @@ impl LookupOp {
 
         Ok(ForwardResult { output })
     }
+
+    /// Returns the scale of the output of the operation.
+    pub fn in_scale(&self, inputs_scale: Vec<crate::Scale>) -> Result<crate::Scale, CircuitError> {
+        let scale = match self {
+            Self::LimeWeight { input_scale, .. } => input_scale.0.log2().floor() as i32,
+            Self::Norm { scale, .. } => scale.0.log2().floor() as i32,
+            Self::RecipSqrt { input_scale, .. } => input_scale.0.log2().floor() as i32,
+            Self::Recip { input_scale, .. } => input_scale.0.log2().floor() as i32,
+            Self::Sqrt { scale, .. } => scale.0.log2().floor() as i32,
+            Self::Abs => inputs_scale[0],
+            _ => panic!(),
+        };
+        Ok(scale)
+    }
 }
 
 impl<F: PrimeField + TensorType + PartialOrd + std::hash::Hash + IntoI64> Op<F> for LookupOp {

@@ -30,115 +30,18 @@ use ndarray::{
 };
 use num::abs;
 
-// todo: maybe add some checks, ensure that original input not
-//       included here
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct LassoModel<F: TensorType> {
     pub local_surrogate: Tensor<F>,
     pub surrogate_samples: Tensor<F>,
     pub lasso_samples: Tensor<F>,
     pub coeffs: Tensor<F>,
-    // TODO: do we give this publicly?
     pub intercept: F,
     pub dual: Tensor<F>,
 }
 
 impl<F: TensorType + PrimeField + PartialOrd + IntoI64> LassoModel<F> {
-    //pub fn new(
-    //    inputs: &Tensor<F>,
-    //    outputs: &Tensor<F>,
-    //    input_scale: &Scale,
-    //    output_scale: &Scale,
-    //    out_scale: &Scale,
-    //) -> Self {
-    //    // TODO: use dequantize tensor method
-    //    let input_shape = inputs.dims();
-    //    let output_shape = outputs.dims();
-
-    //    let dequantize_tensor = |point: &Tensor<F>, scale: &Scale| {
-    //        point
-    //            .iter()
-    //            .map(|t| dequantize(*t, *scale, 0.0))
-    //            .collect::<Vec<_>>()
-    //            .clone()
-    //    };
-
-    //    // dequantize inputs and outputs
-    //    let inputs_float = dequantize_tensor(inputs, input_scale);
-    //    let outputs_float = dequantize_tensor(outputs, output_scale);
-
-    //    let inputs_linfa =
-    //        Array::from_shape_vec((input_shape[0], input_shape[1]), inputs_float).unwrap();
-    //    let outputs_linfa = Array::from_shape_vec(output_shape[0], outputs_float).unwrap();
-
-    //    let data = Dataset::new(inputs_linfa, outputs_linfa);
-    //    // train pure LASSO model with 0.3 penalty
-    //    // TODO: customize params
-    //    let model = ElasticNet::params()
-    //        .penalty(0.3)
-    //        .l1_ratio(1.0)
-    //        .fit(&data)
-    //        .unwrap();
-
-    //    // Ensure kkt holds
-    //    assert!(Self::test_kkt(
-    //        Tensor::from_ndarray(&data.records).unwrap(),
-    //        Tensor::from_ndarray(&data.targets).unwrap(),
-    //        model.intercept(),
-    //        Tensor::from_ndarray(model.hyperplane()).unwrap(),
-    //        0.3,
-    //    ));
-
-    //    println!(
-    //        "lime float is: {:?}, int: {:?}",
-    //        model.hyperplane(),
-    //        model.intercept()
-    //    );
-
-    //    // quantize the model back into Fp
-    //    // Should be quantized into the input scale
-    //    // outputs are always 0 or 1 anyway...
-    //    let intercept = i64_to_felt(quantize_float(&model.intercept(), 0.0, *out_scale).unwrap());
-    //    let hyperplane = model
-    //        .hyperplane()
-    //        .iter()
-    //        .map(|c| i64_to_felt(quantize_float(c, 0.0, *out_scale).unwrap()));
-
-    //    // dequantize inputs and outputs
-    //    let hyperplane2 = dequantize_tensor(
-    //        &Tensor::new(
-    //            Some(&hyperplane.clone().collect::<Vec<_>>()),
-    //            &[model.hyperplane().len()],
-    //        )
-    //        .unwrap(),
-    //        out_scale,
-    //    );
-    //    let intercept2 = dequantize(intercept, *out_scale, 0.0);
-
-    //    // Ensure kkt still holds
-    //    assert!(Self::test_kkt(
-    //        Tensor::from_ndarray(&data.records).unwrap(),
-    //        Tensor::from_ndarray(&data.targets).unwrap(),
-    //        intercept2,
-    //        Tensor::new(Some(&hyperplane2), &[hyperplane2.len()]).unwrap(),
-    //        0.3,
-    //    ));
-
-    //    Self::test_dual(
-    //        Tensor::from_ndarray(&data.records).unwrap(),
-    //        Tensor::from_ndarray(&data.targets).unwrap(),
-    //        intercept2,
-    //        Tensor::new(Some(&hyperplane2), &[hyperplane2.len()]).unwrap(),
-    //        0.3,
-    //    );
-
-    //    return LassoModel {
-    //        local_surrogate: vec![],
-    //        samples: inputs.clone(),
-    //        coeffs: hyperplane.collect::<Vec<_>>(),
-    //        intercept,
-    //    };
-    //}
+    const ALPHA: f64 = 0.010009765625;
 
     pub fn find_local_surrogate<G, H>(
         classify: G,
@@ -155,33 +58,17 @@ impl<F: TensorType + PrimeField + PartialOrd + IntoI64> LassoModel<F> {
             // quantize x
             let x = x.quantize(input_scale).unwrap();
 
-            // TODO: handle different shapes...
             let label = classify(x).unwrap();
 
-            //println!("LABEL: {:?}", label);
-            // dequantize result
             let dequant = label.dequantize(output_scale);
-            //println!("dequant: {:?}", dequant);
             dequant
         };
 
         let x_dequant = x.dequantize(input_scale);
         let target_class = 1.0 - classify_wrapper(x_dequant.clone())[0];
-        //println!("GOT TARGET CLASS: {:?}", target_class);
 
         let local_surrogate = Self::find_closest_enemy(classify_wrapper, &x_dequant, target_class);
-        //println!("LOCAL SURROGATE float: {:?}", local_surrogate);
         let local_surrogate = local_surrogate.quantize(input_scale).unwrap();
-        //println!("LOCAL SURROGATE: {}", local_surrogate.show());
-
-        //println!(
-        //    "LOCAL SURROGATE INT: {:?}",
-        //    local_surrogate
-        //        .iter()
-        //        .map(|v| felt_to_i64(*v))
-        //        .collect::<Vec<_>>()
-        //);
-        //println!("x: {:?}", x);
 
         return Some(local_surrogate);
     }
@@ -206,8 +93,7 @@ impl<F: TensorType + PrimeField + PartialOrd + IntoI64> LassoModel<F> {
         x_expanded.reshape(&[1, d]);
         x_expanded.expand(&[n, d]).unwrap();
         let deltas = (x_expanded.clone() - inputs.clone()).unwrap();
-        // TODO: is this right??? do I need einsum?
-        //
+
         let mut square_distance = vec![];
         for i in 0..n {
             let mut res = 0i64;
@@ -221,8 +107,6 @@ impl<F: TensorType + PrimeField + PartialOrd + IntoI64> LassoModel<F> {
         let square_distance = square_distance
             .enum_map::<_, _, Error>(|i, v| Ok(v / 2i64.pow(8)))
             .unwrap();
-        //println!("SQUARE DIST: {:?}", square_distance);
-        //println!("SQUARE DIST SCALED: {:?}", square_distance);
 
         let mut weights = square_distance.clone();
         if matches!(weight_strat, LimeWeightStrategy::Exponential) {
@@ -241,9 +125,6 @@ impl<F: TensorType + PrimeField + PartialOrd + IntoI64> LassoModel<F> {
             .unwrap()
     }
 
-    // TODO: primal objective!
-    //
-    // OK
     pub fn primal_objective<
         T: TensorType
             + Mul<Output = T>
@@ -272,72 +153,21 @@ impl<F: TensorType + PrimeField + PartialOrd + IntoI64> LassoModel<F> {
         lime_model.reshape(&[lime_model.len(), 1]);
         //let lime_model_t = lime_model.reshape(&[);
         let m = matmul(&[x.clone(), lime_model.clone()]).unwrap();
-        println!("matmul: {:?}", m);
-        // scale
 
         let residuals = (y_moved - m).unwrap();
         let residuals_square = dot(&[residuals.clone(), residuals.clone()], 1).unwrap();
         let residuals_square = residuals_square[residuals_square.len() - 1].clone();
-        println!("residual_square: {:?}", residuals_square);
-        // scale
         let mut residual_mult = multiplier.clone() * residuals_square.clone();
-        // scale
 
         let mut abs_model = abs(&lime_model.clone()).unwrap();
-        println!("l1_abs model: {:?}", lime_model.show());
-        println!("l1_abs: {:?}", abs_model.show());
         let l1_model = accumulated::sum(&abs_model, 1).unwrap();
         let l1_model = l1_model[l1_model.len() - 1].clone();
-        println!("l1_alpha sum: {:?}", l1_model);
-        let mut l1_alpha = n_samples.clone() * alpha.clone() * l1_model;
-        println!("l1_alpha: {:?}", l1_alpha);
+        let mut l1_alpha = alpha.clone() * l1_model;
+        let mut l1_alpha = n_samples.clone() * l1_alpha;
 
         let primal_obj = residual_mult + l1_alpha;
-        println!("PRIMAL OBJ: {:?}", primal_obj);
 
         primal_obj
-
-        //let dual_squared = dot(&[dual.clone(), dual.clone()], 1).unwrap();
-        //let mut dual_squared_val = dual_squared[dual_squared.len() - 1].clone();
-        //if scale {
-        //    dual_squared_val = T::from_i64(
-        //        nonlinearities::const_div(
-        //            &Tensor::new(Some(&[dual_squared_val.into_i64()]), &[1]).unwrap(),
-        //            2f64.powf(16.0),
-        //        )[0],
-        //    );
-        //}
-        //println!("square dual: {:?}", dual_squared_val);
-
-        //let y_moved = (y.clone() - intercept.expand(&[y.len()]).unwrap()).unwrap();
-        //println!("OUTPUTS?: {:?}", y);
-        //println!("CENTERED OUTS: {:?}", y_moved);
-        //let dual_dot_y = dot(&[dual.clone(), y_moved.clone()], 1).unwrap();
-        //let mut dual_dot_y_val = dual_dot_y[dual_dot_y.len() - 1].clone();
-        //if scale {
-        //    dual_dot_y_val = T::from_i64(
-        //        nonlinearities::const_div(
-        //            &Tensor::new(Some(&[dual_dot_y_val.into_i64()]), &[1]).unwrap(),
-        //            2f64.powf(16.0),
-        //        )[0],
-        //    );
-        //}
-        //println!("dual_dot: {:?}", dual_dot_y_val);
-
-        //let mut dual_mult = multiplier.clone() * dual_squared_val.clone();
-        //println!("square_dual_dived: {:?}", dual_mult);
-        //if scale {
-        //    dual_mult = T::from_i64(
-        //        nonlinearities::const_div(
-        //            &Tensor::new(Some(&[dual_mult.into_i64()]), &[1]).unwrap(),
-        //            2f64.powf(24.0),
-        //        )[0],
-        //    );
-        //}
-        //println!("square_dual_dived_scaled: {:?}", dual_mult);
-        //let dual_gap = dual_mult + dual_dot_y_val.clone();
-        //println!("GOT DUAL RES: {:?}", dual_gap);
-        //dual_gap
     }
 
     pub fn dual_objective<
@@ -368,11 +198,8 @@ impl<F: TensorType + PrimeField + PartialOrd + IntoI64> LassoModel<F> {
                 )[0],
             );
         }
-        println!("square dual: {:?}", dual_squared_val);
 
         let y_moved = (y.clone() - intercept.expand(&[y.len()]).unwrap()).unwrap();
-        println!("OUTPUTS?: {:?}", y);
-        println!("CENTERED OUTS: {:?}", y_moved);
         let dual_dot_y = dot(&[dual.clone(), y_moved.clone()], 1).unwrap();
         let mut dual_dot_y_val = dual_dot_y[dual_dot_y.len() - 1].clone();
         if scale {
@@ -383,10 +210,8 @@ impl<F: TensorType + PrimeField + PartialOrd + IntoI64> LassoModel<F> {
                 )[0],
             );
         }
-        println!("dual_dot: {:?}", dual_dot_y_val);
 
         let mut dual_mult = multiplier.clone() * dual_squared_val.clone();
-        println!("square_dual_dived: {:?}", dual_mult);
         if scale {
             dual_mult = T::from_i64(
                 nonlinearities::const_div(
@@ -395,9 +220,7 @@ impl<F: TensorType + PrimeField + PartialOrd + IntoI64> LassoModel<F> {
                 )[0],
             );
         }
-        println!("square_dual_dived_scaled: {:?}", dual_mult);
         let dual_gap = dual_mult - dual_dot_y_val.clone();
-        println!("GOT DUAL RES: {:?}", dual_gap);
         dual_gap
     }
 
@@ -405,8 +228,7 @@ impl<F: TensorType + PrimeField + PartialOrd + IntoI64> LassoModel<F> {
         let mut dual = dual.clone();
         dual.reshape(&[dual.len(), 1]);
         let m = matmul(&[x.clone(), dual.clone()]).unwrap();
-        println!("GOT M: {:?}", m);
-        let range_check_bracket = (0.01);
+        let range_check_bracket = (Self::ALPHA);
         // less than
         let lt_range = m
             .par_enum_map(|_, a_i| {
@@ -417,7 +239,6 @@ impl<F: TensorType + PrimeField + PartialOrd + IntoI64> LassoModel<F> {
                 })
             })
             .unwrap();
-        println!("GOT m2: {:?}", lt_range);
         let lt_range = prod(&lt_range, 1).unwrap();
         let lt_range = lt_range[lt_range.len() - 1].clone();
         let gt_range = m
@@ -429,7 +250,6 @@ impl<F: TensorType + PrimeField + PartialOrd + IntoI64> LassoModel<F> {
                 })
             })
             .unwrap();
-        println!("GOT m2: {:?}, {:?}", lt_range, gt_range);
         let gt_range = prod(&gt_range, 1).unwrap();
         let gt_range = gt_range[gt_range.len() - 1].clone();
         if gt_range * lt_range == 1.0 {
@@ -437,25 +257,7 @@ impl<F: TensorType + PrimeField + PartialOrd + IntoI64> LassoModel<F> {
         } else {
             false
         }
-        //nonlinearities::greater_than(m, range_check_bracket)
-        //    || nonlinearities::less_than(m, -range_check_bracket);
     }
-
-    //pub fn primal_grad(
-    //    intercept: &Tensor<f64>,
-    //    y: &Tensor<f64>,
-    //    x: &Tensor<f64>,
-    //    lime_model: &Tensor<f64>,
-    //    alpha: &f64,
-    //    multiplier: &f64, // TODO: remove this param
-    //    scale: bool,
-    //) -> Tensor<f64> {
-    //    let test = Tensor::new(Some(&[(multiplier * 2.0)]), &[1])
-    //        .unwrap()
-    //        .expand(&[x.len()])
-    //        .unwrap()
-    //        * x.clone();
-    //}
 
     pub fn dual_grad(
         dual: &Tensor<f64>,
@@ -469,16 +271,9 @@ impl<F: TensorType + PrimeField + PartialOrd + IntoI64> LassoModel<F> {
             .expand(&[dual.len()])
             .unwrap()
             * dual.clone();
-        println!(
-            "GOT TEST: {:?}, dual: {:?}, and {:?}",
-            test,
-            dual,
-            multiplier * 2.0
-        );
         let y_moved = (y.clone() - intercept.expand(&[y.len()]).unwrap()).unwrap();
         let grad = test.unwrap() + y_moved;
 
-        println!("GOT!: {:?}", grad);
         grad.unwrap()
     }
 
@@ -522,31 +317,15 @@ impl<F: TensorType + PrimeField + PartialOrd + IntoI64> LassoModel<F> {
         };
 
         let l1_norm = w.norm_l1();
-        println!("dnxta: {:?}, l1_reg {:?}", dual_norm_xta, l1_reg);
-        println!("CONST< GAP: {:?} {:?}", const_, gap);
-        println!("l1_reg {:?}", l1_reg * l1_norm);
-        println!("dual? {:?}", const_ * r.dot(&y));
 
         gap += l1_reg * l1_norm - const_ * r.dot(&y)
             + half * l2_reg * (1.0 + const_ * const_) * w_norm2;
 
         let r_test = r.clone() * const_;
-        println!("FEASIBLE??: {:?}", x.t().dot(&(-r_test.clone())));
-        println!("HEY!: their r: {:?}", r);
-        println!("HEY!: their const: {:?}", const_);
-        println!("HEY!: their dual: {:?}", r_test);
         let r_norm2_test = r_test.dot(&r_test);
         let primal_obj = half * (r_norm2) + l1_reg * l1_norm;
         let dual_obj = -half * (r_norm2) - (-r).dot(&y);
         let dual_obj2 = -half * (r_norm2_test) - (-r_test).dot(&y);
-        println!(
-            "primal? :{:?}, dual: {:?}, dual2: {:?}, gap: {:?}, gap2: {:?}",
-            primal_obj,
-            dual_obj,
-            dual_obj2,
-            primal_obj - dual_obj,
-            primal_obj - dual_obj2
-        );
 
         gap
     }
@@ -568,7 +347,6 @@ impl<F: TensorType + PrimeField + PartialOrd + IntoI64> LassoModel<F> {
 
         if !matches!(weight_strat, LimeWeightStrategy::Uniform) {
             let sqrt_weights = Self::compute_weights(x, &inputs, weight_strat);
-            //println!("weights: {:?}", sqrt_weights);
 
             inputs = mult(&[inputs.clone(), sqrt_weights.clone()]).unwrap();
             outputs = mult(&[outputs.clone(), sqrt_weights.clone()]).unwrap();
@@ -576,46 +354,26 @@ impl<F: TensorType + PrimeField + PartialOrd + IntoI64> LassoModel<F> {
             output_scale += 8;
         }
 
-        println!("INPUT OUTPUT SCALE: {:?}", input_scale);
         let inputs_float = inputs.dequantize(input_scale);
         let outputs_float = outputs.dequantize(output_scale);
 
         let input_shape = inputs.dims();
         let output_shape = outputs.dims();
 
-        // TODO: compute the kernel here... and use modified lime algorithm
-        //println!("Inputs: {:?}", inputs_float.to_vec());
-        //println!("outputs: {:?}", outputs_float.to_vec());
         let inputs_linfa =
             Array::from_shape_vec((input_shape[0], input_shape[1]), inputs_float.to_vec()).unwrap();
         let outputs_linfa = Array::from_shape_vec(output_shape[0], outputs_float.to_vec()).unwrap();
 
         let data = Dataset::new(inputs_linfa.clone(), outputs_linfa.clone());
-        // train pure LASSO model with 0.3 penalty
-        // TODO: customize params
-        // TODO: ensure penalty is quantizable...
-        // TODO(EVAN): what should the penalty be?
         let model = ElasticNet::params()
-            .penalty(0.01)
+            .penalty(Self::ALPHA)
             .l1_ratio(1.0)
             .max_iterations(100000)
             .tolerance(1e-12)
             .fit(&data)
             .unwrap();
         let intercept_arr = Array::from_shape_vec((1), vec![model.intercept()]).unwrap();
-        println!("DUALITY GAP?? {:?}", model.duality_gap());
-        println!(
-            "MY GAP?: {:?}",
-            Self::duality_gap(
-                inputs_linfa.view(),
-                (&outputs_linfa.view() - intercept_arr).view(),
-                model.hyperplane().view(),
-                1.0,
-                0.01,
-            )
-        );
 
-        // TODO: wackyness...
         let dual = if model.hyperplane().iter().all(|x| *x == 0.0) {
             inputs_linfa.dot(model.hyperplane())
         } else {
@@ -628,18 +386,15 @@ impl<F: TensorType + PrimeField + PartialOrd + IntoI64> LassoModel<F> {
                     0.0,
                 )
             });
-            println!("HEY!: my r: {:?}", dual);
             let dual_norm_xta = (inputs_linfa.t().dot(&dual)).norm_max();
             // add some slack for precision issues
-            let l1_reg = 1.0 * 0.01 * (outputs_linfa.len() as f64);
+            let l1_reg = 1.0 * Self::ALPHA * (outputs_linfa.len() as f64);
             if dual_norm_xta > l1_reg {
                 let const_ = (l1_reg / (dual_norm_xta));
-                println!("HEY!: my const: {:?}", const_);
                 dual *= -const_;
             } else {
                 dual *= -1.0;
             }
-            println!("HI THERE");
             dual = dual.map(|v| {
                 dequantize(
                     i64_to_felt::<Fp>(quantize_float(v, 0.0, 16).unwrap()),
@@ -647,35 +402,11 @@ impl<F: TensorType + PrimeField + PartialOrd + IntoI64> LassoModel<F> {
                     0.0,
                 )
             });
-            println!("FEASIBLE??: {:?}", inputs_linfa.t().dot(&dual));
-            println!("INPUT??: {:?}", inputs_linfa);
-            println!("HEY!: my dual: {:?}", dual);
-            /// (inputs.dims()[0] as f64);
-            //// TODO: other dual alg?
-            ////println!("DUAL1: {:?}", dual);
-            //let test = inputs_linfa.t().dot(&inputs_linfa);
-            //println!("TEST: {:?}", test);
-            //println!("hyper {:?}", model.hyperplane());
-            //let test2 = test.dot(model.hyperplane());
-            //println!("TEST2: {:?}", test2);
-            //println!("TEST2 out: {:?}", outputs_linfa);
-            //let mut ss = (0..test.shape()[0])
-            //    .map(|i| {
-            //        0.01 / (2.0 * (test2[i] - 2.0 * (outputs_linfa[i] - model.intercept())).abs())
-            //    })
-            //    .fold(f64::INFINITY, |a, b| a.min(b));
-            //if ss == f64::INFINITY {
-            //    ss = 0.0;
-            //}
-            //2.0 * ss * (inputs_linfa.dot(model.hyperplane()) - (outputs_linfa - model.intercept()))
             dual
         };
 
         let hyperplane = model.hyperplane().to_vec();
         let dual: Vec<f64> = dual.to_vec();
-        println!("hyperplane: {:?}", hyperplane);
-        println!("intercept: {:?}", model.intercept());
-        println!("dual: {:?}", dual);
 
         // TODO(EVAN): could there be issues with rounding? No right?
         let mut top_k = hyperplane.clone();
@@ -688,8 +419,6 @@ impl<F: TensorType + PrimeField + PartialOrd + IntoI64> LassoModel<F> {
                 .unwrap()
         });
         let top_k_idx = top_k_idx[hyperplane.len() - k..].to_vec();
-        //println!("top_k: {:?}", top_k);
-        //println!("top_k_idx: {:?}", top_k_idx);
         let coeffs = Tensor::new(Some(&hyperplane), &[hyperplane.len()])
             .unwrap()
             .quantize(model_scale)
@@ -698,8 +427,6 @@ impl<F: TensorType + PrimeField + PartialOrd + IntoI64> LassoModel<F> {
             .unwrap()
             .quantize(model_scale)
             .unwrap();
-        //println!("COEFFS: {:?}", coeffs.show());
-        //println!("topk: {:?}", top_k.show());
         let top_k_idx = Tensor::new(Some(&top_k_idx), &[top_k_idx.len()])
             .unwrap()
             .enum_map::<_, _, Error>(|i, v| Ok(i64_to_felt(v as i64)))
@@ -711,53 +438,20 @@ impl<F: TensorType + PrimeField + PartialOrd + IntoI64> LassoModel<F> {
         let mut dualf = Tensor::new(Some(&dual), &[dual.len()]).unwrap();
         let interceptf = Tensor::new(Some(&[model.intercept()]), &[1]).unwrap();
         let alphaf = Tensor::new(Some(&[model.intercept()]), &[1]).unwrap();
-        let hyperplanef = Tensor::new(Some(&hyperplane), &[model.hyperplane().len()]).unwrap();
-        //let mut obj1 = Self::dual_objective(&dualf, &interceptf, &outputs_float, &mult, false);
-        //let mult_primal = 1.0 / (2.0);
-        //let mult_primal_nsamples = outputs_float.len() as f64;
-        //let mut pobj = Self::primal_objective(
-        //    &interceptf,
-        //    &outputs_float,
-        //    &inputs_float,
-        //    &hyperplanef,
-        //    &0.01,
-        //    &mult_primal,
-        //    &mult_primal_nsamples,
-        //    false,
-        //);
-        //let mut obj_begin = obj1.clone();
-        //let mut dual_test = dualf.clone();
-        //while obj1 <= 0.03 {
-        //    let grad = Self::dual_grad(&dual_test, &interceptf, &outputs_float, &mult, false);
-        //    let test = (dual_test.clone()
-        //        + (Tensor::new(Some(&[0.001]), &[1])
-        //            .unwrap()
-        //            .expand(&[grad.len()])
-        //            .unwrap()
-        //            * grad)
-        //            .unwrap())
-        //    .unwrap();
-        //    let obj = Self::dual_objective(&test, &interceptf, &outputs_float, &mult, false);
-        //    println!("inputs_float: {:?}", inputs_float);
-        //    println!("OBJ TRACE: {:?}", obj);
-        //    let feasible = Self::dual_feasible(&inputs_float, &test);
-        //    if obj >= obj1 && feasible {
-        //        obj1 = obj;
-        //        dual_test = test;
-        //    } else {
-        //        break;
-        //    }
-        //}
-        //let obj2 = Self::dual_objective(
-        //    &dual_test.clone(),
-        //    &interceptf,
-        //    &outputs_float,
-        //    &mult,
-        //    false,
-        //);
-        //// TODO(EVAN): is this useful?
-        //dualf = dual_test.clone();
-        //println!("BEFORE: {:?}, AFTER: {:?}", obj_begin, obj2);
+        let hyperplanef = coeffs.dequantize(model_scale);
+        let mut obj1 = Self::dual_objective(&dualf, &interceptf, &outputs_float, &mult, false);
+        let mult_primal = 1.0 / (2.0);
+        let mult_primal_nsamples = outputs_float.len() as f64;
+        let mut pobj = Self::primal_objective(
+            &interceptf,
+            &outputs_float,
+            &inputs_float,
+            &hyperplanef,
+            &Self::ALPHA,
+            &mult_primal,
+            &mult_primal_nsamples,
+            false,
+        );
 
         let dualf = dualf.quantize_f64(16).unwrap();
         let interceptf = interceptf.quantize_f64(12).unwrap();
@@ -775,39 +469,11 @@ impl<F: TensorType + PrimeField + PartialOrd + IntoI64> LassoModel<F> {
             &mult2,
             true,
         );
-        println!("GOT: {:?}", dequantize(dg, 8, 0.0));
-
-        //.quantize(model_scale)
-        //.unwrap();
-
-        //println!(
-        //    "Inputs int: {:?}",
-        //    inputs.iter().map(|v| felt_to_i64(*v)).collect::<Vec<_>>()
-        //);
-        //println!(
-        //    "Outputs int: {:?}",
-        //    outputs.iter().map(|v| felt_to_i64(*v)).collect::<Vec<_>>()
-        //);
-        //println!(
-        //    "hyperplane int: {:?}",
-        //    coeffs.iter().map(|v| felt_to_i64(*v)).collect::<Vec<_>>()
-        //);
-        //println!("intercept int: {:?}", felt_to_i64(intercept));
-        //println!(
-        //    "dual int: {:?}",
-        //    dual.iter().map(|v| felt_to_i64(*v)).collect::<Vec<_>>()
-        //);
-        //println!(
-        //    "topk int: {:?}",
-        //    top_k.iter().map(|v| felt_to_i64(*v)).collect::<Vec<_>>()
-        //);
-        println!("coeffs: {:?}", coeffs);
-        println!("intercept: {:?}", model.intercept());
-        println!("dual: {:?}", dual);
-
         (coeffs, top_k, top_k_idx, intercept, dual)
     }
 
+    /// Old function used for spheres
+    /// We don't use this anymore...
     pub fn find_closest_enemy<G>(classify: G, x: &Tensor<f64>, target_class: f64) -> Tensor<f64>
     where
         G: Fn(Tensor<f64>) -> Tensor<f64>,
