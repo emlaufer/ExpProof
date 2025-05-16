@@ -2,6 +2,9 @@
 ExpProof
 </h1>
 
+This is a fork of ![EZKL](https://github.com/zkonduit/ezkl) which supports zero-knowledge proof of explanations,
+used for our ![research paper](https://arxiv.org/abs/2502.03773). 
+
 # Getting Started with Zero-Knowledge Explanations
 
 Running ExpProof is as simple as running ezkl. We currently only support the command line interface.
@@ -11,7 +14,6 @@ First, you will need to have exported your model as an ONNX file.
 ## Generate Settings
 
 Run the following command to generate the settings.json file:
-
 `ezkl gen-settings`
 
 Here is an example with the types of settings you will need for explanations:
@@ -67,117 +69,3 @@ For functions related to witness generation (i.e. running lime),
 go to `src/graph/lime.rs`.
 
 To configure ablations for benchmarking, go to `src/ablate.rs`
-
-----------------------
-
-### getting started ⚙️
-
-The easiest way to get started is to try out a notebook. 
-
-#### Python
-Install the python bindings by calling.
-
-```bash
-pip install ezkl
-```
-Or for the GPU:
-
-```bash
-pip install ezkl-gpu
-```
-
-Google Colab Example to learn how you can train a neural net and deploy an inference verifier onchain for use in other smart contracts. [![Notebook](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/zkonduit/ezkl/blob/main/examples/notebooks/ezkl_demo.ipynb) 
-
-
-More notebook tutorials can be found within `examples/notebooks`.
-
-#### CLI
-Install the CLI
-``` shell
-curl https://raw.githubusercontent.com/zkonduit/ezkl/main/install_ezkl_cli.sh | bash
-```
-
-https://user-images.githubusercontent.com/45801863/236771676-5bbbbfd1-ba6f-418a-902e-20738ce0e9f0.mp4
-
-For more details visit the [docs](https://docs.ezkl.xyz). The CLI is faster than Python, as it has less overhead. For even more speed and convenience, check out the [remote proving service](https://ei40vx5x6j0.typeform.com/to/sFv1oxvb), which feels like the CLI but is backed by a tuned cluster.
-
-Build the auto-generated rust documentation and open the docs in your browser locally. `cargo doc --open`
-
-#### In-browser EVM verifier
-
-As an alternative to running the native Halo2 verifier as a WASM binding in the browser, you can use the in-browser EVM verifier. The source code of which you can find in the `in-browser-evm-verifier` directory and a README with instructions on how to use it.
-
-
-### building the project 🔨
-
-#### Rust CLI
-
-You can install the library from source
-
-```bash
-cargo install --locked --path .
-```
-
-`ezkl` now auto-manages solc installation for you.
-
-
-
-
-#### building python bindings
-Python bindings exists and can be built using `maturin`. You will need `rust` and `cargo` to be installed.
-
-```bash
-python -m venv .env
-source .env/bin/activate
-pip install -r requirements.txt
-maturin develop --release --features python-bindings
-# dependencies specific to tutorials
-pip install torch pandas numpy seaborn jupyter onnx kaggle py-solc-x web3 librosa tensorflow keras tf2onnx
-```
-
-### GPU Acceleration
-
-If you have access to NVIDIA GPUs, you can enable acceleration by building with the feature `icicle` and setting the following environment variable:
-
-```sh
-export ENABLE_ICICLE_GPU=true
-```
-
-GPU acceleration is provided by [Icicle](https://github.com/ingonyama-zk/icicle)
-
-To go back to running with CPU, the previous environment variable must be **unset** instead of being switch to a value of false:
-
-```sh
-unset ENABLE_ICICLE_GPU
-```
-
-**NOTE:** Even with the above environment variable set, icicle is disabled for circuits where k <= 8. To change the value of `k` where icicle is enabled, you can set the environment variable `ICICLE_SMALL_K`.
-
-### contributing 🌎
-
-If you're interested in contributing and are unsure where to start, reach out to one of the maintainers:
-
-* dante (alexander-camuto)
-* jason (jasonmorton)
-
-More broadly:
-
-- See currently open issues for ideas on how to contribute.
-
-- For PRs we use the [conventional commits](https://www.conventionalcommits.org/en/v1.0.0/) naming convention.
-
-- To report bugs or request new features [create a new issue within Issues](https://github.com/zkonduit/ezkl/issues) to inform the greater community.
-
-
-Any contribution intentionally submitted for inclusion in the work by you shall be licensed to Zkonduit Inc. under the terms and conditions specified in the [CLA](https://github.com/zkonduit/ezkl/blob/main/cla.md), which you agree to by intentionally submitting a contribution. In particular, you have the right to submit the contribution and we can distribute it, among other terms and conditions. 
-
-### no security guarantees
-
-Ezkl is unaudited, beta software undergoing rapid development. There may be bugs. No guarantees of security are made and it should not be relied on in production.
-
-> NOTE: Because operations are quantized when they are converted from an onnx file to a zk-circuit, outputs in python and ezkl may differ slightly. 
-
-### no warranty
-
-Copyright (c) 2024 Zkonduit Inc. THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
