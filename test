@@ -1,5 +1,0 @@
-warning: `/home/evan/Research/zkml-explain/ezkl/.cargo/config` is deprecated in favor of `config.toml`
-note: If you need to support cargo 1.38 or earlier, you can symlink `config` to `config.toml`
-warning: unused manifest key: target.wasm32-unknown-unknown.runner
-    Updating git repository `https://github.com/ingonyama-zk/icicle?rev=45b00fb`
-    Updating git repository `https://github.com/ingonyama-zk/icicle.git`
