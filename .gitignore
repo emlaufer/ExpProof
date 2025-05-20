@@ -13,7 +13,7 @@ pkg
 *.vk
 *.pk
 *.code
-*.key
+pk.key
 *.params
 *.bytecode
 *.bin
