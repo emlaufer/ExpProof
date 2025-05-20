@@ -2,8 +2,8 @@
 ExpProof
 </h1>
 
-This is a fork of ![EZKL](https://github.com/zkonduit/ezkl) which supports zero-knowledge proof of explanations,
-used for our ![research paper](https://arxiv.org/abs/2502.03773). 
+This is a fork of [EZKL](https://github.com/zkonduit/ezkl) which supports zero-knowledge proof of explanations,
+used for our [research paper](https://arxiv.org/abs/2502.03773). 
 
 # Getting Started with Zero-Knowledge Explanations
 
